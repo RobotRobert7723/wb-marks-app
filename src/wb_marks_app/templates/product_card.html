@@ -31,6 +31,9 @@
   .source-chip.template { background: #eaf3ff; color: #1c5794; }
   .product-actions { display: flex; flex-wrap: wrap; gap: 12px; }
   .product-actions .button, .product-actions button { min-width: 160px; text-align: center; }
+  .upload-status { font-weight: 700; margin-top: 12px; }
+  .upload-status.error { color: #b42318; }
+  .upload-status.success { color: #3f6212; }
   .table-scroll { border: 1px solid #dfe3eb; overflow: auto; }
   .table-scroll.compact-scroll { display: inline-block; max-width: 100%; vertical-align: top; }
   .mapping-table {
@@ -72,7 +75,7 @@
   }
 </style>
 
-<div class="product-page" data-wb-article="{{ product_card.wb_article }}">
+<div class="product-page" data-wb-article="{{ product_card.wb_article }}" data-seller-article="{{ product_card.wb_summary.seller_article }}">
   <div class="card">
     <div class="product-card-header">
       <div class="product-image" aria-label="Фото товара WB">
@@ -92,9 +95,11 @@
         <p class="muted">Адрес страницы содержит артикул WB: <code>/product-cards/{{ product_card.wb_article }}</code></p>
         <p class="muted">{{ product_card.api_status }}</p>
         <div class="product-actions">
-          <button type="button">Загрузить GTIN</button>
+          <button type="button" id="gtin-upload-button">Загрузить GTIN</button>
+          <input id="gtin-upload-input" type="file" accept=".xlsx,.xlsm" hidden />
           <button type="button" class="secondary">Сохранить</button>
         </div>
+        <div id="gtin-upload-status" class="upload-status" role="status" aria-live="polite"></div>
       </div>
     </div>
   </div>
@@ -191,20 +196,20 @@
         </thead>
         <tbody>
           {% for row in product_card.rows %}
-          <tr>
+          <tr data-wb-size="{{ row.wb_size }}">
             <td class="api-cell" title="{{ row.barcode }}">{{ row.barcode }}</td>
             <td class="api-cell" title="{{ row.wb_size }}">{{ row.wb_size }}</td>
             <td class="api-cell" title="{{ row.ru_size }}">{{ row.ru_size }}</td>
-            <td class="teksher-cell" title="{{ row.teksher_size }}">{{ row.teksher_size }}</td>
-            <td class="teksher-cell" title="{{ row.product_type }}">{{ row.product_type }}</td>
-            <td class="teksher-cell" title="{{ row.gtin }}">{{ row.gtin }}</td>
+            <td class="teksher-cell" data-gtin-field="teksher_size" title="{{ row.teksher_size }}">{{ row.teksher_size }}</td>
+            <td class="teksher-cell" data-gtin-field="product_type" title="{{ row.product_type }}">{{ row.product_type }}</td>
+            <td class="teksher-cell" data-gtin-field="gtin" title="{{ row.gtin }}">{{ row.gtin }}</td>
             <td class="teksher-cell" title="{{ row.tnved }}">{{ row.tnved }}</td>
             <td class="teksher-cell" title="{{ row.country }}">{{ row.country }}</td>
-            <td class="teksher-cell" title="{{ row.vendor_article }}">{{ row.vendor_article }}</td>
-            <td class="teksher-cell" title="{{ row.color }}">{{ row.color }}</td>
+            <td class="teksher-cell" data-gtin-field="vendor_article" title="{{ row.vendor_article }}">{{ row.vendor_article }}</td>
+            <td class="teksher-cell" data-gtin-field="color" title="{{ row.color }}">{{ row.color }}</td>
             <td class="teksher-cell" title="{{ row.composition }}">{{ row.composition }}</td>
             <td class="teksher-cell" title="{{ row.target_gender }}">{{ row.target_gender }}</td>
-            <td class="teksher-cell" title="{{ row.trademark }}">{{ row.trademark }}</td>
+            <td class="teksher-cell" data-gtin-field="trademark" title="{{ row.trademark }}">{{ row.trademark }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -287,4 +292,73 @@
     </div>
   </div>
 </div>
+<script>
+(() => {
+  const page = document.querySelector('.product-page');
+  const button = document.getElementById('gtin-upload-button');
+  const input = document.getElementById('gtin-upload-input');
+  const status = document.getElementById('gtin-upload-status');
+  if (!page || !button || !input || !status) return;
+
+  button.addEventListener('click', () => input.click());
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+    setStatus('Загружаем GTIN...', '');
+    button.disabled = true;
+
+    try {
+      const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/gtin-upload`, {
+        method: 'POST',
+        body: formData,
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        setStatus(payload.message || 'Не удалось загрузить GTIN файл.', 'error');
+        return;
+      }
+      applyGtinRows(payload.rows || []);
+      setStatus(payload.message || 'GTIN загружены.', 'success');
+    } catch (error) {
+      setStatus('Не удалось загрузить GTIN файл.', 'error');
+    } finally {
+      button.disabled = false;
+      input.value = '';
+    }
+  });
+
+  function applyGtinRows(rows) {
+    const bySize = new Map(rows.map((row) => [normalize(row.size), row]));
+    document.querySelectorAll('tr[data-wb-size]').forEach((tr) => {
+      const row = bySize.get(normalize(tr.dataset.wbSize || ''));
+      if (!row) return;
+      setCell(tr, 'teksher_size', row.size ? `${row.size} МЕЖДУНАРОДНЫЙ` : '');
+      setCell(tr, 'product_type', (row.functional_name || '').toUpperCase());
+      setCell(tr, 'gtin', row.gtin || '');
+      setCell(tr, 'vendor_article', row.vendor_article || '');
+      setCell(tr, 'color', (row.color || '').toUpperCase());
+      setCell(tr, 'trademark', row.brand || '');
+    });
+  }
+
+  function setCell(row, field, value) {
+    const cell = row.querySelector(`[data-gtin-field="${field}"]`);
+    if (!cell) return;
+    cell.textContent = value || '';
+    cell.title = value || '';
+  }
+
+  function setStatus(message, kind) {
+    status.textContent = message;
+    status.className = `upload-status ${kind}`.trim();
+  }
+
+  function normalize(value) {
+    return String(value || '').trim().toLowerCase();
+  }
+})();
+</script>
 {% endblock %}

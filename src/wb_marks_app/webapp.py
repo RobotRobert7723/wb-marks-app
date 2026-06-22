@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -37,6 +37,7 @@ from wb_marks_app.server_settings import (
     update_settings,
 )
 from wb_marks_app.services.browser import BrowserSessionManager
+from wb_marks_app.services.gtin_excel import GtinExcelParser
 from wb_marks_app.services.labels import build_manual_labels, labels_to_dicts, make_label_record
 from wb_marks_app.services.product_cards import ProductCardTemplateService
 from wb_marks_app.services.server_workflow import LaunchRequest, WorkflowRunService
@@ -47,6 +48,7 @@ from wb_marks_app.services.wb import WBService
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 workflow_service = WorkflowRunService()
 product_card_service = ProductCardTemplateService()
+gtin_excel_parser = GtinExcelParser()
 
 
 def _raw_settings_dict(settings: AppSettingsModel) -> dict[str, str]:
@@ -416,6 +418,36 @@ def create_app() -> FastAPI:
             _base_context(request, product_card=product_card_service.build_template(wb_article, config)),
         )
 
+    @app.post("/api/product-cards/{wb_article}/gtin-upload")
+    async def upload_product_card_gtin(request: Request, wb_article: str, file: UploadFile = File(...)):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        if not _is_excel_file(file.filename or ""):
+            return JSONResponse({"ok": False, "message": "Загрузите Excel файл формата .xlsx или .xlsm.", "rows": []})
+
+        content = await file.read()
+        try:
+            gtin_rows = gtin_excel_parser.parse(content)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "message": str(exc), "rows": []})
+
+        with session_scope() as session:
+            settings = get_or_create_settings(session, user_id)
+            config = settings_to_app_config(settings)
+        product_card = product_card_service.build_template(wb_article, config)
+        seller_article = product_card.wb_summary.seller_article
+        matched_rows = gtin_excel_parser.find_by_vendor_article(gtin_rows, seller_article)
+        if not matched_rows:
+            return JSONResponse({"ok": False, "message": "Артикул продавца в файле не найден", "rows": []})
+
+        return {
+            "ok": True,
+            "message": f"GTIN загружены: {len(matched_rows)} строк.",
+            "seller_article": seller_article,
+            "rows": [_serialize_gtin_row(row) for row in matched_rows],
+        }
+
     @app.post("/labels/preview", response_class=HTMLResponse)
     def labels_preview_page(
         request: Request,
@@ -714,6 +746,22 @@ def _default_label_form() -> dict:
         "unit_count": "1",
         "copies": 1,
         "note_text": "",
+    }
+
+
+def _is_excel_file(filename: str) -> bool:
+    return filename.lower().endswith((".xlsx", ".xlsm"))
+
+
+def _serialize_gtin_row(row) -> dict:
+    return {
+        "gtin": row.gtin,
+        "brand": row.brand,
+        "functional_name": row.functional_name,
+        "variety": row.variety,
+        "vendor_article": row.vendor_article,
+        "color": row.color,
+        "size": row.size,
     }
 
 
