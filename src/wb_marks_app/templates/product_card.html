@@ -32,17 +32,21 @@
   .product-actions { display: flex; flex-wrap: wrap; gap: 12px; }
   .product-actions .button, .product-actions button { min-width: 160px; text-align: center; }
   .table-scroll { border: 1px solid #dfe3eb; overflow: auto; }
+  .table-scroll.compact-scroll { display: inline-block; max-width: 100%; vertical-align: top; }
   .mapping-table {
     background: white;
     border-collapse: collapse;
     font-size: 13px;
-    min-width: 1220px;
+    line-height: 1.25;
     table-layout: fixed;
+    width: 100%;
   }
   .mapping-table th, .mapping-table td {
     border-bottom: 1px solid #e6e8f0;
     border-right: 1px solid #e6e8f0;
     padding: 7px 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
   .mapping-table th { color: white; font-weight: 700; }
@@ -54,6 +58,10 @@
   .mapping-table .teksher-cell { background: #f8fbf1; }
   .mapping-table .template-cell { background: #f2f7ff; }
   .mapping-table .number { text-align: right; }
+  .wb-summary-table { min-width: 1380px; }
+  .wb-teksher-table { min-width: 1660px; }
+  .print-table { min-width: 680px; width: 680px; }
+  .order-table { min-width: 260px; width: 260px; }
   .section-title { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; }
   .section-title h2 { margin: 0; }
   .split-actions { display: grid; gap: 20px; grid-template-columns: minmax(520px, 1fr) minmax(360px, .65fr); }
@@ -97,7 +105,19 @@
       <span class="source-chip api">загружаются при открытии</span>
     </div>
     <div class="table-scroll">
-      <table class="mapping-table">
+      <table class="mapping-table wb-summary-table">
+        <colgroup>
+          <col style="width: 24%;" />
+          <col style="width: 13%;" />
+          <col style="width: 8%;" />
+          <col style="width: 8%;" />
+          <col style="width: 8%;" />
+          <col style="width: 10%;" />
+          <col style="width: 7%;" />
+          <col style="width: 10%;" />
+          <col style="width: 8%;" />
+          <col style="width: 4%;" />
+        </colgroup>
         <thead>
           <tr>
             <th class="api-head">Наименование</th>
@@ -114,16 +134,16 @@
         </thead>
         <tbody>
           <tr>
-            <td class="api-cell">{{ product_card.wb_summary.name }}</td>
-            <td class="api-cell">{{ product_card.wb_summary.seller_category }}</td>
-            <td class="api-cell">{{ product_card.wb_summary.wb_article }}</td>
-            <td class="api-cell">{{ product_card.wb_summary.tnved }}</td>
-            <td class="api-cell">{{ product_card.wb_summary.country }}</td>
-            <td class="api-cell">{{ product_card.wb_summary.seller_article }}</td>
-            <td class="api-cell">{{ product_card.wb_summary.color }}</td>
-            <td class="api-cell">{{ product_card.wb_summary.composition }}</td>
-            <td class="api-cell">{{ product_card.wb_summary.gender }}</td>
-            <td class="api-cell">{{ product_card.wb_summary.brand }}</td>
+            <td class="api-cell" title="{{ product_card.wb_summary.name }}">{{ product_card.wb_summary.name }}</td>
+            <td class="api-cell" title="{{ product_card.wb_summary.seller_category }}">{{ product_card.wb_summary.seller_category }}</td>
+            <td class="api-cell" title="{{ product_card.wb_summary.wb_article }}">{{ product_card.wb_summary.wb_article }}</td>
+            <td class="api-cell" title="{{ product_card.wb_summary.tnved }}">{{ product_card.wb_summary.tnved }}</td>
+            <td class="api-cell" title="{{ product_card.wb_summary.country }}">{{ product_card.wb_summary.country }}</td>
+            <td class="api-cell" title="{{ product_card.wb_summary.seller_article }}">{{ product_card.wb_summary.seller_article }}</td>
+            <td class="api-cell" title="{{ product_card.wb_summary.color }}">{{ product_card.wb_summary.color }}</td>
+            <td class="api-cell" title="{{ product_card.wb_summary.composition }}">{{ product_card.wb_summary.composition }}</td>
+            <td class="api-cell" title="{{ product_card.wb_summary.gender }}">{{ product_card.wb_summary.gender }}</td>
+            <td class="api-cell" title="{{ product_card.wb_summary.brand }}">{{ product_card.wb_summary.brand }}</td>
           </tr>
         </tbody>
       </table>
@@ -136,7 +156,22 @@
       <span class="source-chip teksher">мэппинг атрибутов</span>
     </div>
     <div class="table-scroll">
-      <table class="mapping-table">
+      <table class="mapping-table wb-teksher-table">
+        <colgroup>
+          <col style="width: 140px;" />
+          <col style="width: 70px;" />
+          <col style="width: 95px;" />
+          <col style="width: 170px;" />
+          <col style="width: 175px;" />
+          <col style="width: 130px;" />
+          <col style="width: 120px;" />
+          <col style="width: 115px;" />
+          <col style="width: 130px;" />
+          <col style="width: 90px;" />
+          <col style="width: 135px;" />
+          <col style="width: 220px;" />
+          <col style="width: 100px;" />
+        </colgroup>
         <thead>
           <tr>
             <th class="api-head">Баркоды</th>
@@ -157,19 +192,19 @@
         <tbody>
           {% for row in product_card.rows %}
           <tr>
-            <td class="api-cell">{{ row.barcode }}</td>
-            <td class="api-cell">{{ row.wb_size }}</td>
-            <td class="api-cell">{{ row.ru_size }}</td>
-            <td class="teksher-cell">{{ row.teksher_size }}</td>
-            <td class="teksher-cell">{{ row.product_type }}</td>
-            <td class="teksher-cell">{{ row.gtin }}</td>
-            <td class="teksher-cell">{{ row.tnved }}</td>
-            <td class="teksher-cell">{{ row.country }}</td>
-            <td class="teksher-cell">{{ row.vendor_article }}</td>
-            <td class="teksher-cell">{{ row.color }}</td>
-            <td class="teksher-cell">{{ row.composition }}</td>
-            <td class="teksher-cell">{{ row.target_gender }}</td>
-            <td class="teksher-cell">{{ row.trademark }}</td>
+            <td class="api-cell" title="{{ row.barcode }}">{{ row.barcode }}</td>
+            <td class="api-cell" title="{{ row.wb_size }}">{{ row.wb_size }}</td>
+            <td class="api-cell" title="{{ row.ru_size }}">{{ row.ru_size }}</td>
+            <td class="teksher-cell" title="{{ row.teksher_size }}">{{ row.teksher_size }}</td>
+            <td class="teksher-cell" title="{{ row.product_type }}">{{ row.product_type }}</td>
+            <td class="teksher-cell" title="{{ row.gtin }}">{{ row.gtin }}</td>
+            <td class="teksher-cell" title="{{ row.tnved }}">{{ row.tnved }}</td>
+            <td class="teksher-cell" title="{{ row.country }}">{{ row.country }}</td>
+            <td class="teksher-cell" title="{{ row.vendor_article }}">{{ row.vendor_article }}</td>
+            <td class="teksher-cell" title="{{ row.color }}">{{ row.color }}</td>
+            <td class="teksher-cell" title="{{ row.composition }}">{{ row.composition }}</td>
+            <td class="teksher-cell" title="{{ row.target_gender }}">{{ row.target_gender }}</td>
+            <td class="teksher-cell" title="{{ row.trademark }}">{{ row.trademark }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -183,8 +218,15 @@
         <h2>Печать этикеток</h2>
         <span class="source-chip template">UI шаблон</span>
       </div>
-      <div class="table-scroll">
-        <table class="mapping-table">
+      <div class="table-scroll compact-scroll">
+        <table class="mapping-table print-table">
+          <colgroup>
+            <col style="width: 155px;" />
+            <col style="width: 70px;" />
+            <col style="width: 95px;" />
+            <col style="width: 155px;" />
+            <col style="width: 120px;" />
+          </colgroup>
           <thead>
             <tr>
               <th class="template-head">Баркоды</th>
@@ -217,8 +259,12 @@
         <h2>Заказ в Текшер</h2>
         <span class="source-chip template">UI шаблон</span>
       </div>
-      <div class="table-scroll">
-        <table class="mapping-table">
+      <div class="table-scroll compact-scroll">
+        <table class="mapping-table order-table">
+          <colgroup>
+            <col style="width: 120px;" />
+            <col style="width: 140px;" />
+          </colgroup>
           <thead>
             <tr>
               <th class="template-head">Размер</th>
