@@ -467,11 +467,10 @@ class ProductCardRouteTests(unittest.TestCase):
             webapp.teksher_mapping_service = old_teksher_mapping_service
             webapp.teksher_product_service = old_teksher_product_service
 
-    def test_mapping_save_endpoint_does_not_save_when_teksher_gtin_exists(self) -> None:
+    def test_mapping_save_endpoint_saves_when_teksher_gtin_exists(self) -> None:
         import wb_marks_app.webapp as webapp
         from wb_marks_app.models import AppConfig
         from wb_marks_app.services.product_cards import ProductCardTemplate, ProductCardMappingRow, WbProductSummary
-        from wb_marks_app.services.teksher import TEKSHER_EXISTING_PRODUCT_MESSAGE
 
         old_create_all = webapp.create_all
         old_load_config = webapp.load_config
@@ -548,11 +547,14 @@ class ProductCardRouteTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(409, response.status_code)
+            self.assertEqual(200, response.status_code)
             payload = response.json()
-            self.assertFalse(payload["ok"])
-            self.assertEqual(TEKSHER_EXISTING_PRODUCT_MESSAGE, payload["message"])
-            self.assertEqual([], fake_mapping_service.saved)
+            self.assertTrue(payload["ok"])
+            self.assertEqual(2, payload["version"])
+            self.assertEqual(1, payload["rows_saved"])
+            self.assertEqual([], payload["teksher_draft_ids"])
+            self.assertEqual(1, len(fake_mapping_service.saved))
+            self.assertEqual("04709055620626", fake_mapping_service.saved[0]["rows"][0]["gtin"])
             client.close()
         finally:
             webapp.create_all = old_create_all
@@ -667,9 +669,7 @@ class FakeTeksherProductService:
             }
         )
         if self.existing:
-            from wb_marks_app.services.teksher import ExistingTeksherProductError, TEKSHER_EXISTING_PRODUCT_MESSAGE
-
-            raise ExistingTeksherProductError(TEKSHER_EXISTING_PRODUCT_MESSAGE)
+            return []
         return self.draft_ids
 
 

@@ -5,13 +5,12 @@ import json
 import time
 from datetime import datetime
 import unittest
+from urllib.parse import parse_qs, urlparse
 
 from wb_marks_app.models import AppConfig, MarkingTask
 from wb_marks_app.services.product_cards import ProductCardMappingRow, ProductCardTemplate, WbProductSummary
 from wb_marks_app.services.teksher import (
-    ExistingTeksherProductError,
     TEKSHER_CLOTHING_REGULATION,
-    TEKSHER_EXISTING_PRODUCT_MESSAGE,
     TeksherService,
 )
 from wb_marks_app.teksher_api_cli import run_full_flow
@@ -178,11 +177,13 @@ class FakeSessionProducts(FakeSession):
     def __init__(
         self,
         existing: bool = False,
+        existing_gtins: set[str] | None = None,
         empty_create_response: bool = False,
         no_content_lookup: bool = False,
     ) -> None:
         super().__init__()
         self.existing = existing
+        self.existing_gtins = existing_gtins or set()
         self.empty_create_response = empty_create_response
         self.no_content_lookup = no_content_lookup
         self.created_payloads: list[dict] = []
@@ -190,16 +191,17 @@ class FakeSessionProducts(FakeSession):
     def get(self, url, headers=None, timeout=None):
         self.calls.append(("GET", url, None))
         if "/facade/api/v1/products?gtin=" in url:
+            query_gtin = parse_qs(urlparse(url).query).get("gtin", [""])[0]
             if self.no_content_lookup:
                 return FakeResponse(204, text="", json_error=True)
-            if self.existing:
+            if self.existing or query_gtin in self.existing_gtins:
                 return FakeResponse(
                     200,
                     json_data={
                         "data": [
                             {
                                 "id": "product-1",
-                                "gtin": "04709055620626",
+                                "gtin": query_gtin or "04709055620626",
                                 "status": "DRAFT",
                             }
                         ]
@@ -501,20 +503,57 @@ class TeksherServiceTests(unittest.TestCase):
 
         service._wait_for_order_ready("order-op-1", config)
 
-    def test_ensure_product_drafts_for_mapping_raises_when_gtin_exists(self) -> None:
+    def test_ensure_product_drafts_for_mapping_skips_existing_gtin(self) -> None:
         session = FakeSessionProducts(existing=True)
         service = TeksherService(browser=FakeBrowser(), session=session, sleep=lambda _: None)
         config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
 
-        with self.assertRaises(ExistingTeksherProductError) as raised:
-            service.ensure_product_drafts_for_mapping(
-                _product_card(),
-                [{"gtin": "04709055620626", "wb_size": "38"}],
-                config,
-            )
+        draft_ids = service.ensure_product_drafts_for_mapping(
+            _product_card(),
+            [{"gtin": "04709055620626", "wb_size": "38"}],
+            config,
+        )
 
-        self.assertEqual(TEKSHER_EXISTING_PRODUCT_MESSAGE, str(raised.exception))
+        self.assertEqual([], draft_ids)
         self.assertEqual([], session.created_payloads)
+
+    def test_ensure_product_drafts_for_mapping_creates_only_missing_gtins(self) -> None:
+        session = FakeSessionProducts(existing_gtins={"04709055620626"})
+        service = TeksherService(browser=FakeBrowser(), session=session, sleep=lambda _: None)
+        config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
+
+        draft_ids = service.ensure_product_drafts_for_mapping(
+            _product_card(),
+            [
+                {
+                    "wb_size": "38",
+                    "teksher_size": "38 МЕЖДУНАРОДНЫЙ",
+                    "product_type": "КОСТЮМ СПОРТИВНЫЙ",
+                    "gtin": "04709055620626",
+                    "tnved": "6112120000",
+                    "country": "Кыргызстан",
+                    "color": "БЕЛЫЙ",
+                    "composition": "полиэстер 100%",
+                    "trademark": "ErLine",
+                },
+                {
+                    "wb_size": "40",
+                    "teksher_size": "40 МЕЖДУНАРОДНЫЙ",
+                    "product_type": "КОСТЮМ СПОРТИВНЫЙ",
+                    "gtin": "04709055620633",
+                    "tnved": "6112120000",
+                    "country": "Кыргызстан",
+                    "color": "БЕЛЫЙ",
+                    "composition": "полиэстер 100%",
+                    "trademark": "ErLine",
+                },
+            ],
+            config,
+        )
+
+        self.assertEqual(["draft-1"], draft_ids)
+        self.assertEqual(1, len(session.created_payloads))
+        self.assertEqual("04709055620633", session.created_payloads[0]["gtin"])
 
     def test_ensure_product_drafts_for_mapping_creates_draft_without_approve(self) -> None:
         session = FakeSessionProducts(existing=False)

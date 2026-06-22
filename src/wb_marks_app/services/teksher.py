@@ -129,20 +129,27 @@ class TeksherService:
             return []
 
         self.ensure_authenticated(config)
+        rows_to_create: list[dict] = []
         for row in rows:
             gtin = self._teksher_gtin(row.get("gtin"))
             if self._product_exists_by_gtin(gtin, config):
-                raise ExistingTeksherProductError(TEKSHER_EXISTING_PRODUCT_MESSAGE)
+                self.logger(f"Teksher product already exists for GTIN {gtin}; draft creation skipped.")
+                continue
+            rows_to_create.append(row)
+        if not rows_to_create:
+            return []
 
         manufacturer_info = self._manufacturer_create_fields(config)
         draft_ids: list[str] = []
-        for row in rows:
+        for row in rows_to_create:
             payload = self._product_draft_payload(product_card, row, manufacturer_info, config)
             try:
                 draft_ids.append(self._create_product_draft(payload, config))
             except AppError as exc:
                 if self._is_existing_product_error(exc):
-                    raise ExistingTeksherProductError(TEKSHER_EXISTING_PRODUCT_MESSAGE) from exc
+                    gtin = self._text(payload.get("gtin"))
+                    self.logger(f"Teksher product already exists for GTIN {gtin}; draft creation skipped.")
+                    continue
                 raise
         return draft_ids
 
