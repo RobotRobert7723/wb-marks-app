@@ -72,11 +72,45 @@ class TeksherMappingService:
     ) -> tuple[int, int]:
         wb_rows = {self._row_key(row.barcode, row.wb_size): row for row in product_card.rows}
         wb_rows_by_size = {self._normalize(row.wb_size): row for row in product_card.rows if row.wb_size}
-        version = self.latest_version(session, user_id, product_card.wb_article) + 1
+        previous_version = self.latest_version(session, user_id, product_card.wb_article)
+        version = previous_version + 1
         created = 0
 
+        payload_by_key: dict[str, dict] = {}
         for payload in rows_payload:
             if not self._has_teksher_values(payload):
+                continue
+            wb_barcode = self._text(payload.get("wb_barcode"))
+            wb_size = self._text(payload.get("wb_size"))
+            wb_row = wb_rows.get(self._row_key(wb_barcode, wb_size)) or wb_rows_by_size.get(self._normalize(wb_size))
+            key = self._row_key(wb_row.barcode, wb_row.wb_size) if wb_row else self._row_key(wb_barcode, wb_size)
+            payload_by_key[key] = payload
+
+        if not payload_by_key:
+            raise ValueError("Нет данных мэппинга для сохранения.")
+
+        previous_rows = self._version_rows(session, user_id, product_card.wb_article, previous_version)
+        previous_by_key = {self._row_key(row.wb_barcode, row.wb_size): row for row in previous_rows}
+        previous_by_size = {self._normalize(row.wb_size): row for row in previous_rows if row.wb_size}
+        handled_keys: set[str] = set()
+
+        for wb_row in product_card.rows:
+            key = self._row_key(wb_row.barcode, wb_row.wb_size)
+            payload = payload_by_key.get(key)
+            if payload is not None:
+                session.add(self._model_from_payload(user_id, product_card, wb_row, payload, version, source))
+                handled_keys.add(key)
+                created += 1
+                continue
+
+            saved = previous_by_key.get(key) or previous_by_size.get(self._normalize(wb_row.wb_size))
+            if saved is None:
+                continue
+            session.add(self._model_from_saved(user_id, product_card, wb_row, saved, version, source))
+            created += 1
+
+        for key, payload in payload_by_key.items():
+            if key in handled_keys:
                 continue
             wb_barcode = self._text(payload.get("wb_barcode"))
             wb_size = self._text(payload.get("wb_size"))
@@ -84,8 +118,6 @@ class TeksherMappingService:
             session.add(self._model_from_payload(user_id, product_card, wb_row, payload, version, source))
             created += 1
 
-        if created == 0:
-            raise ValueError("Нет данных мэппинга для сохранения.")
         session.flush()
         return version, created
 
@@ -96,6 +128,22 @@ class TeksherMappingService:
             .where(TeksherMappingModel.wb_article == wb_article)
         ).scalar_one_or_none()
         return int(version or 0)
+
+    def _version_rows(
+        self,
+        session: Session,
+        user_id: str,
+        wb_article: str,
+        version: int,
+    ) -> list[TeksherMappingModel]:
+        if version == 0:
+            return []
+        return session.execute(
+            select(TeksherMappingModel)
+            .where(TeksherMappingModel.user_id == user_id)
+            .where(TeksherMappingModel.wb_article == wb_article)
+            .where(TeksherMappingModel.version == version)
+        ).scalars().all()
 
     def _model_from_payload(
         self,
@@ -135,6 +183,32 @@ class TeksherMappingService:
             target_gender=self._text(payload.get("target_gender")),
             trademark=self._text(payload.get("trademark")),
         )
+
+    def _model_from_saved(
+        self,
+        user_id: str,
+        product_card: ProductCardTemplate,
+        wb_row: ProductCardMappingRow | None,
+        saved: TeksherMappingModel,
+        version: int,
+        source: str,
+    ) -> TeksherMappingModel:
+        payload = {
+            "wb_barcode": wb_row.barcode if wb_row else saved.wb_barcode,
+            "wb_size": wb_row.wb_size if wb_row else saved.wb_size,
+            "wb_ru_size": wb_row.ru_size if wb_row else saved.wb_ru_size,
+            "teksher_size": saved.teksher_size,
+            "product_type": saved.product_type,
+            "gtin": saved.gtin,
+            "tnved": saved.tnved,
+            "country": saved.country,
+            "vendor_article": saved.vendor_article,
+            "color": saved.color,
+            "composition": saved.composition,
+            "target_gender": saved.target_gender,
+            "trademark": saved.trademark,
+        }
+        return self._model_from_payload(user_id, product_card, wb_row, payload, version, source)
 
     def _has_teksher_values(self, payload: dict) -> bool:
         return any(self._text(payload.get(field)) for field in TEKSHER_FIELDS)

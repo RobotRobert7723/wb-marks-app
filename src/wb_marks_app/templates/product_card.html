@@ -448,7 +448,6 @@
   }
 
   function applyGtinRows(rows) {
-    clearGtinTable();
     const bySize = new Map(rows.map((row) => [normalize(row.size), row]));
     const wbCompare = {
       product_type: page.dataset.wbProductType || '',
