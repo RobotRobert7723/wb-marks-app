@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ title }}</title>
+    <style>
+      @page { size: 60mm 40mm; margin: 0; }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #eef0f3;
+        color: #000;
+        font-family: Arial, sans-serif;
+      }
+      .toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        background: #1f2937;
+        color: #fff;
+      }
+      .toolbar a,
+      .toolbar button {
+        border: 0;
+        border-radius: 8px;
+        padding: 9px 13px;
+        background: #276ef1;
+        color: #fff;
+        font: 700 14px Arial, sans-serif;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      .toolbar .meta { margin-left: auto; font-size: 14px; opacity: .9; }
+      .toolbar .message { color: #ffd8d8; font-weight: 700; }
+      .labels-sheet {
+        display: flex;
+        flex-direction: column;
+        gap: 8mm;
+        align-items: center;
+        padding: 10mm 0;
+      }
+      .label {
+        position: relative;
+        overflow: hidden;
+        width: 60mm;
+        height: 40mm;
+        padding: 1.4mm 2mm;
+        background: #fff;
+        page-break-after: always;
+      }
+      .label:last-child { page-break-after: auto; }
+      .title {
+        width: 48mm;
+        margin: 0 auto;
+        overflow: hidden;
+        text-align: center;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        font-size: 4.9mm;
+        font-weight: 500;
+        line-height: 5.5mm;
+      }
+      .count {
+        position: absolute;
+        top: 1.2mm;
+        right: 2.4mm;
+        font-size: 5.6mm;
+        line-height: 6mm;
+      }
+      .wb-canvas {
+        display: block;
+        width: 50.5mm;
+        height: 8.8mm;
+        margin: .3mm auto 0;
+        image-rendering: pixelated;
+      }
+      .wb-number {
+        margin-top: -.2mm;
+        text-align: center;
+        font-size: 4.8mm;
+        line-height: 5mm;
+      }
+      .details {
+        position: absolute;
+        left: 3mm;
+        top: 20.4mm;
+        width: 32mm;
+        font-size: 3.15mm;
+        line-height: 3.55mm;
+      }
+      .details strong { font-weight: 700; }
+      .details .composition {
+        display: block;
+        max-height: 9.6mm;
+        overflow: hidden;
+      }
+      .dm-wrap {
+        position: absolute;
+        right: 4mm;
+        bottom: 5.2mm;
+        width: 15.5mm;
+        height: 15.5mm;
+      }
+      .dm-canvas {
+        display: block;
+        width: 15.5mm;
+        height: 15.5mm;
+        image-rendering: pixelated;
+      }
+      .cz-logo {
+        position: absolute;
+        right: 9.1mm;
+        top: 18.3mm;
+        display: flex;
+        align-items: center;
+        gap: .6mm;
+        font-size: 1.4mm;
+        font-weight: 700;
+        line-height: 1.35mm;
+        text-transform: lowercase;
+      }
+      .cz-logo-mark {
+        width: 2.8mm;
+        height: 2.8mm;
+        border: .45mm solid #000;
+        border-radius: .8mm;
+      }
+      .mark-preview {
+        position: absolute;
+        right: 2mm;
+        bottom: 1mm;
+        width: 23mm;
+        overflow: hidden;
+        font-size: 2.6mm;
+        line-height: 3mm;
+        white-space: nowrap;
+      }
+      .barcode-error {
+        position: absolute;
+        left: 2mm;
+        right: 2mm;
+        bottom: 1mm;
+        color: #b42318;
+        font-size: 2mm;
+      }
+
+      .label--wb .title { margin-top: 4.1mm; font-weight: 700; }
+      .label--wb .wb-canvas {
+        position: absolute;
+        left: 4.8mm;
+        bottom: 8.1mm;
+        width: 50.6mm;
+        height: 10.8mm;
+        margin: 0;
+      }
+      .label--wb .wb-number {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 2.1mm;
+      }
+      .label--wb .wb-info {
+        margin-top: 1.3mm;
+        text-align: center;
+        font-size: 4.3mm;
+        line-height: 5.1mm;
+      }
+      .label--wb .wb-info-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0 5mm;
+        margin-top: 1mm;
+        padding: 0 6mm;
+        font-size: 4.4mm;
+        line-height: 5.2mm;
+      }
+
+      .label--chz .title {
+        position: absolute;
+        top: 1.7mm;
+        left: 20mm;
+        width: 31mm;
+        font-weight: 700;
+      }
+      .label--chz .cz-logo {
+        left: 7.2mm;
+        right: auto;
+        top: 3.2mm;
+        bottom: auto;
+      }
+      .label--chz .dm-wrap {
+        left: 5.7mm;
+        right: auto;
+        bottom: 8.3mm;
+        width: 25mm;
+        height: 25mm;
+      }
+      .label--chz .dm-canvas { width: 25mm; height: 25mm; }
+      .label--chz .chz-side {
+        position: absolute;
+        right: 5.6mm;
+        top: 11mm;
+        width: 16mm;
+        text-align: center;
+        font-size: 4.5mm;
+        line-height: 5mm;
+      }
+      .label--chz .chz-side strong {
+        display: block;
+        font-size: 5.5mm;
+        line-height: 6mm;
+      }
+      .label--chz .eac {
+        position: absolute;
+        right: 7.8mm;
+        bottom: 12.2mm;
+        font-size: 7mm;
+        font-weight: 700;
+      }
+      .label--chz .mark-preview {
+        left: 5.7mm;
+        right: auto;
+        bottom: 2.8mm;
+        width: 49mm;
+      }
+
+      .label--note {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: 7mm 8mm;
+      }
+      .note-title {
+        font-size: 8.4mm;
+        line-height: 9.3mm;
+      }
+      .note-text {
+        margin-top: 5mm;
+        white-space: pre-line;
+        font-size: 5.2mm;
+        line-height: 6mm;
+      }
+
+      @media print {
+        body { background: #fff; }
+        .toolbar { display: none; }
+        .labels-sheet { display: block; padding: 0; }
+        .label { box-shadow: none; margin: 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <a href="/labels">Этикетки</a>
+      <button type="button" onclick="window.print()">Печать</button>
+      {% if message %}<span class="message">{{ message }}</span>{% endif %}
+      <span class="meta">60x40 · {{ labels|length }}</span>
+    </div>
+
+    <div class="labels-sheet">
+      {% for label in labels %}
+      <section class="label label--{{ label.template }}" data-label-index="{{ loop.index0 }}">
+        {% if label.template == "note" %}
+          <div class="note-title">Менеджеру ПВЗ проверить комплектность:</div>
+          <div class="note-text">{{ label.note_text }}</div>
+        {% elif label.template == "wb" %}
+          <div class="count">{{ label.unit_count }}</div>
+          <div class="title">{{ label.item_name }}</div>
+          <div class="wb-info">
+            {% if label.vendor_code %}<strong>Артикул:</strong><br />{{ label.vendor_code }}<br />{% endif %}
+            {% if label.composition %}<strong>Состав:</strong><br />{{ label.composition }}{% endif %}
+          </div>
+          <div class="wb-info-grid">
+            <div>{% if label.size %}<strong>Размер:</strong> {{ label.size }}{% endif %}</div>
+            <div>{% if label.color %}<strong>Цвет:</strong> {{ label.color }}{% endif %}</div>
+          </div>
+          {% if label.wb_barcode %}<canvas class="wb-canvas"></canvas><div class="wb-number">{{ label.wb_barcode }}</div>{% endif %}
+        {% elif label.template == "chz" %}
+          <div class="count">{{ label.unit_count }}</div>
+          <div class="cz-logo"><span class="cz-logo-mark"></span><span>честный<br />знак</span></div>
+          <div class="title">{{ label.item_name }}</div>
+          {% if label.mark_code %}<div class="dm-wrap"><canvas class="dm-canvas"></canvas></div>{% endif %}
+          <div class="chz-side">
+            {% if label.color %}<strong>Цвет:</strong>{{ label.color }}{% endif %}
+            {% if label.size %}<strong>Размер:</strong><strong>{{ label.size }}</strong>{% endif %}
+          </div>
+          <div class="eac">EAC</div>
+          {% if label.mark_preview %}<div class="mark-preview">{{ label.mark_preview }}</div>{% endif %}
+        {% else %}
+          <div class="count">{{ label.unit_count }}</div>
+          <div class="title">{{ label.item_name }}</div>
+          {% if label.wb_barcode %}<canvas class="wb-canvas"></canvas><div class="wb-number">{{ label.wb_barcode }}</div>{% endif %}
+          <div class="details">
+            {% if label.size %}<strong>Размер:</strong> {{ label.size }}<br />{% endif %}
+            {% if label.color %}<strong>Цвет:</strong> {{ label.color }}<br />{% endif %}
+            {% if label.vendor_code %}<strong>Артикул:</strong> {{ label.vendor_code }}<br />{% endif %}
+            {% if label.composition %}<strong>Состав:</strong><br /><span class="composition">{{ label.composition }}</span>{% endif %}
+          </div>
+          {% if label.mark_code %}
+          <div class="cz-logo"><span class="cz-logo-mark"></span><span>честный<br />знак</span></div>
+          <div class="dm-wrap"><canvas class="dm-canvas"></canvas></div>
+          {% endif %}
+          {% if label.mark_preview %}<div class="mark-preview">{{ label.mark_preview }}</div>{% endif %}
+        {% endif %}
+        <div class="barcode-error" aria-live="polite"></div>
+      </section>
+      {% endfor %}
+    </div>
+
+    <script src="/static/vendor/bwip-js-min.js"></script>
+    <script>
+      const labels = {{ labels|tojson }};
+
+      function renderCode128(canvas, value) {
+        if (!canvas || !value) return;
+        bwipjs.toCanvas(canvas, {
+          bcid: "code128",
+          text: String(value),
+          scaleX: 2,
+          scaleY: 2,
+          height: 9,
+          padding: 0,
+          includetext: false
+        });
+      }
+
+      function renderDataMatrix(canvas, value) {
+        if (!canvas || !value) return;
+        bwipjs.toCanvas(canvas, {
+          bcid: "datamatrix",
+          text: "^FNC1" + String(value),
+          parsefnc: true,
+          scale: 4,
+          padding: 0
+        });
+      }
+
+      labels.forEach((label, index) => {
+        const root = document.querySelector(`[data-label-index="${index}"]`);
+        if (!root) return;
+        try {
+          renderCode128(root.querySelector(".wb-canvas"), label.wb_barcode);
+          renderDataMatrix(root.querySelector(".dm-canvas"), label.mark_code);
+        } catch (error) {
+          const box = root.querySelector(".barcode-error");
+          if (box) box.textContent = String(error && error.message ? error.message : error);
+        }
+      });
+    </script>
+  </body>
+</html>

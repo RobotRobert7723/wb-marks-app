@@ -1,0 +1,24 @@
+{
+  "id": "SUP-1001",
+  "name": "Draft supply example",
+  "status": "draft",
+  "createdAt": "2026-04-24T09:00:00+00:00",
+  "items": [
+    {
+      "barcode": "2000000000011",
+      "name": "T-Shirt White M",
+      "quantity": 2,
+      "supplierArticle": "TS-WHT-M",
+      "nmId": "1001001",
+      "sku": "SKU-001"
+    },
+    {
+      "barcode": "2000000000012",
+      "name": "T-Shirt White L",
+      "quantity": 1,
+      "supplierArticle": "TS-WHT-L",
+      "nmId": "1001002",
+      "sku": "SKU-002"
+    }
+  ]
+}

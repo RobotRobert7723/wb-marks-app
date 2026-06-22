@@ -1,0 +1,67 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="card">
+  <h1>Настройки</h1>
+  {% if message %}<p><strong>{{ message }}</strong></p>{% endif %}
+  <form method="post" action="/settings">
+    <div class="grid">
+      <div>
+        <label>WB API base URL</label>
+        <input type="text" name="wb_api_base_url" value="{{ settings.wb_api_base_url }}" />
+      </div>
+      <div>
+        <label>WB API token</label>
+        <input type="password" name="wb_api_token" value="{{ raw_settings.wb_api_token }}" />
+      </div>
+      <div>
+        <label>Teksher username</label>
+        <input type="text" name="teksher_username" value="{{ settings.teksher_username }}" />
+      </div>
+      <div>
+        <label>Teksher password</label>
+        <input type="password" name="teksher_password" value="{{ raw_settings.teksher_password }}" />
+      </div>
+      <div>
+        <label>Получатель Трансгран</label>
+        <input type="text" name="teksher_transgran_recipient_name" value="{{ settings.teksher_transgran_recipient_name }}" />
+      </div>
+      <div>
+        <label>ИНН получателя</label>
+        <input type="text" name="teksher_transgran_recipient_inn" value="{{ settings.teksher_transgran_recipient_inn }}" />
+      </div>
+      <div>
+        <label>КПП получателя</label>
+        <input type="text" name="teksher_transgran_recipient_kpp" value="{{ settings.teksher_transgran_recipient_kpp }}" />
+      </div>
+      <div>
+        <label>Префикс номера документа</label>
+        <input type="text" name="transgran_document_number_prefix" value="{{ settings.transgran_document_number_prefix }}" />
+      </div>
+      <div>
+        <label>Каталог артефактов</label>
+        <input type="text" name="artifact_storage_dir" value="{{ settings.artifact_storage_dir }}" />
+      </div>
+      <div>
+        <label>Таймаут шага, сек</label>
+        <input type="number" name="step_timeout_seconds" value="{{ settings.step_timeout_seconds }}" />
+      </div>
+      <div>
+        <label>Режим mapping</label>
+        <select name="mapping_mode">
+          <option value="size" {% if settings.mapping_mode == "size" %}selected{% endif %}>size</option>
+          <option value="vendor_size" {% if settings.mapping_mode == "vendor_size" %}selected{% endif %}>vendor_size</option>
+          <option value="barcode" {% if settings.mapping_mode == "barcode" %}selected{% endif %}>barcode</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top: 16px;">
+      <label>Mapping JSON</label>
+      <textarea name="mapping_payload">{{ settings.mapping_payload }}</textarea>
+      <p class="muted">Поддерживаемые ключи: <code>size_to_gtin</code>, <code>vendor_size_to_gtin</code>, <code>barcode_to_gtin</code>.</p>
+    </div>
+    <div class="actions" style="margin-top: 16px;">
+      <button type="submit">Сохранить настройки</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

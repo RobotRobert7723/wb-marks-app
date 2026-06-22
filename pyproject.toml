@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wb-marks-app"
+version = "0.1.0"
+description = "Server-side workflow for WB draft supplies, Honest Signs CSV, and Teksher transgran orchestration."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.116",
+  "uvicorn>=0.35",
+  "sqlalchemy>=2.0",
+  "psycopg[binary]>=3.2",
+  "jinja2>=3.1",
+  "itsdangerous>=2.2",
+  "python-multipart>=0.0.20",
+  "requests>=2.32",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+legacy-desktop = [
+  "PySide6>=6.7",
+  "playwright>=1.52",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+wb_marks_app = ["templates/*.html", "static/vendor/*"]

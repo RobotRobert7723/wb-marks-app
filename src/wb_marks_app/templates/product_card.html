@@ -1,0 +1,244 @@
+{% extends "layout.html" %}
+{% block content %}
+<style>
+  .product-page { display: grid; gap: 20px; }
+  .product-card-header { display: grid; gap: 24px; grid-template-columns: 220px minmax(320px, 1fr); align-items: start; }
+  .product-image {
+    align-items: center;
+    aspect-ratio: 3 / 4;
+    background: #eef0f2;
+    border: 1px solid #cfd4dc;
+    color: #667085;
+    display: flex;
+    font-weight: 700;
+    justify-content: center;
+    overflow: hidden;
+    text-align: center;
+  }
+  .product-image img { display: block; height: 100%; object-fit: cover; width: 100%; }
+  .product-heading { margin: 0 0 8px; }
+  .product-meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
+  .source-chip {
+    border-radius: 999px;
+    display: inline-flex;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 7px 10px;
+  }
+  .source-chip.api { background: #eef0f2; color: #475467; }
+  .source-chip.teksher { background: #edf6df; color: #4d6f18; }
+  .source-chip.template { background: #eaf3ff; color: #1c5794; }
+  .product-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+  .product-actions .button, .product-actions button { min-width: 160px; text-align: center; }
+  .table-scroll { border: 1px solid #dfe3eb; overflow: auto; }
+  .mapping-table {
+    background: white;
+    border-collapse: collapse;
+    font-size: 13px;
+    min-width: 1220px;
+    table-layout: fixed;
+  }
+  .mapping-table th, .mapping-table td {
+    border-bottom: 1px solid #e6e8f0;
+    border-right: 1px solid #e6e8f0;
+    padding: 7px 8px;
+    white-space: nowrap;
+  }
+  .mapping-table th { color: white; font-weight: 700; }
+  .mapping-table th:last-child, .mapping-table td:last-child { border-right: 0; }
+  .mapping-table .api-head { background: #838383; }
+  .mapping-table .teksher-head { background: #97b958; }
+  .mapping-table .template-head { background: #32639b; }
+  .mapping-table .api-cell { background: #f2f3f5; }
+  .mapping-table .teksher-cell { background: #f8fbf1; }
+  .mapping-table .template-cell { background: #f2f7ff; }
+  .mapping-table .number { text-align: right; }
+  .section-title { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; }
+  .section-title h2 { margin: 0; }
+  .split-actions { display: grid; gap: 20px; grid-template-columns: minmax(520px, 1fr) minmax(360px, .65fr); }
+  .empty-cell { color: #98a2b3; }
+  @media (max-width: 860px) {
+    .product-card-header, .split-actions { grid-template-columns: 1fr; }
+    .product-image { max-width: 220px; }
+  }
+</style>
+
+<div class="product-page" data-wb-article="{{ product_card.wb_article }}">
+  <div class="card">
+    <div class="product-card-header">
+      <div class="product-image" aria-label="Фото товара WB">
+        {% if product_card.image_url %}
+        <img src="{{ product_card.image_url }}" alt="Фото товара WB {{ product_card.wb_article }}" />
+        {% else %}
+        Фото WB<br />{{ product_card.wb_article }}
+        {% endif %}
+      </div>
+      <div>
+        <h1 class="product-heading">Карточка WB {{ product_card.wb_article }}</h1>
+        <div class="product-meta">
+          <span class="source-chip api">API WB и плагин</span>
+          <span class="source-chip teksher">Текшер</span>
+          <span class="source-chip template">UI шаблон</span>
+        </div>
+        <p class="muted">Адрес страницы содержит артикул WB: <code>/product-cards/{{ product_card.wb_article }}</code></p>
+        <p class="muted">{{ product_card.api_status }}</p>
+        <div class="product-actions">
+          <button type="button">Загрузить GTIN</button>
+          <button type="button" class="secondary">Сохранить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">
+      <h2>Данные карточки WB</h2>
+      <span class="source-chip api">загружаются при открытии</span>
+    </div>
+    <div class="table-scroll">
+      <table class="mapping-table">
+        <thead>
+          <tr>
+            <th class="api-head">Наименование</th>
+            <th class="api-head">Категория продавца</th>
+            <th class="api-head">Артикул WB</th>
+            <th class="api-head">ТНВЭД</th>
+            <th class="api-head">Страна</th>
+            <th class="api-head">Артикул продавца</th>
+            <th class="api-head">Цвет</th>
+            <th class="api-head">Состав</th>
+            <th class="api-head">Пол</th>
+            <th class="api-head">Бренд</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="api-cell">{{ product_card.wb_summary.name }}</td>
+            <td class="api-cell">{{ product_card.wb_summary.seller_category }}</td>
+            <td class="api-cell">{{ product_card.wb_summary.wb_article }}</td>
+            <td class="api-cell">{{ product_card.wb_summary.tnved }}</td>
+            <td class="api-cell">{{ product_card.wb_summary.country }}</td>
+            <td class="api-cell">{{ product_card.wb_summary.seller_article }}</td>
+            <td class="api-cell">{{ product_card.wb_summary.color }}</td>
+            <td class="api-cell">{{ product_card.wb_summary.composition }}</td>
+            <td class="api-cell">{{ product_card.wb_summary.gender }}</td>
+            <td class="api-cell">{{ product_card.wb_summary.brand }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">
+      <h2>Связь WB и Текшер</h2>
+      <span class="source-chip teksher">мэппинг атрибутов</span>
+    </div>
+    <div class="table-scroll">
+      <table class="mapping-table">
+        <thead>
+          <tr>
+            <th class="api-head">Баркоды</th>
+            <th class="api-head">Размер</th>
+            <th class="api-head">Рос. размер</th>
+            <th class="teksher-head">Размер</th>
+            <th class="teksher-head">Вид товара</th>
+            <th class="teksher-head">GTIN</th>
+            <th class="teksher-head">ТНВЭД</th>
+            <th class="teksher-head">Страна</th>
+            <th class="teksher-head">Артикул</th>
+            <th class="teksher-head">Цвет</th>
+            <th class="teksher-head">Состав</th>
+            <th class="teksher-head">Целевой пол</th>
+            <th class="teksher-head">Товарный знак</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in product_card.rows %}
+          <tr>
+            <td class="api-cell">{{ row.barcode }}</td>
+            <td class="api-cell">{{ row.wb_size }}</td>
+            <td class="api-cell">{{ row.ru_size }}</td>
+            <td class="teksher-cell">{{ row.teksher_size }}</td>
+            <td class="teksher-cell">{{ row.product_type }}</td>
+            <td class="teksher-cell">{{ row.gtin }}</td>
+            <td class="teksher-cell">{{ row.tnved }}</td>
+            <td class="teksher-cell">{{ row.country }}</td>
+            <td class="teksher-cell">{{ row.vendor_article }}</td>
+            <td class="teksher-cell">{{ row.color }}</td>
+            <td class="teksher-cell">{{ row.composition }}</td>
+            <td class="teksher-cell">{{ row.target_gender }}</td>
+            <td class="teksher-cell">{{ row.trademark }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="split-actions">
+    <div class="card">
+      <div class="section-title">
+        <h2>Печать этикеток</h2>
+        <span class="source-chip template">UI шаблон</span>
+      </div>
+      <div class="table-scroll">
+        <table class="mapping-table">
+          <thead>
+            <tr>
+              <th class="template-head">Баркоды</th>
+              <th class="template-head">Размер</th>
+              <th class="template-head">Рос. размер</th>
+              <th class="template-head">Готовы к нанесению</th>
+              <th class="template-head">Напечатать</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in product_card.rows %}
+            <tr>
+              <td class="template-cell">{{ row.barcode }}</td>
+              <td class="template-cell">{{ row.wb_size }}</td>
+              <td class="template-cell">{{ row.ru_size }}</td>
+              <td class="template-cell number">{{ row.ready_to_mark }}</td>
+              <td class="template-cell number">{{ row.print_count }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="actions" style="margin-top: 14px;">
+        <button type="button" class="secondary">Напечатать этикетки</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">
+        <h2>Заказ в Текшер</h2>
+        <span class="source-chip template">UI шаблон</span>
+      </div>
+      <div class="table-scroll">
+        <table class="mapping-table">
+          <thead>
+            <tr>
+              <th class="template-head">Размер</th>
+              <th class="template-head">Заказать</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in product_card.rows %}
+            <tr>
+              <td class="template-cell">{{ row.wb_size }}</td>
+              <td class="template-cell number">{{ row.order_count }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="actions" style="margin-top: 14px;">
+        <button type="button" class="secondary">Заказать в Текшер</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

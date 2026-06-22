@@ -1,0 +1,63 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="card">
+  <h1>Этикетки 60x40</h1>
+  {% if message %}<p class="error">{{ message }}</p>{% endif %}
+  <form method="post" action="/labels/preview">
+    <div class="grid">
+      <div>
+        <label for="template">Шаблон</label>
+        <select id="template" name="template">
+          <option value="combined" {% if form.template == "combined" %}selected{% endif %}>WB + ЧЗ</option>
+          <option value="wb" {% if form.template == "wb" %}selected{% endif %}>WB</option>
+          <option value="chz" {% if form.template == "chz" %}selected{% endif %}>ЧЗ</option>
+          <option value="note" {% if form.template == "note" %}selected{% endif %}>Комплектность</option>
+        </select>
+      </div>
+      <div>
+        <label for="item_name">Наименование</label>
+        <input id="item_name" name="item_name" value="{{ form.item_name }}" />
+      </div>
+      <div>
+        <label for="wb_barcode">WB barcode</label>
+        <input id="wb_barcode" name="wb_barcode" value="{{ form.wb_barcode }}" />
+      </div>
+      <div>
+        <label for="unit_count">Количество на этикетке</label>
+        <input id="unit_count" name="unit_count" value="{{ form.unit_count }}" />
+      </div>
+      <div>
+        <label for="vendor_code">Артикул</label>
+        <input id="vendor_code" name="vendor_code" value="{{ form.vendor_code }}" />
+      </div>
+      <div>
+        <label for="size">Размер</label>
+        <input id="size" name="size" value="{{ form.size }}" />
+      </div>
+      <div>
+        <label for="color">Цвет</label>
+        <input id="color" name="color" value="{{ form.color }}" />
+      </div>
+      <div>
+        <label for="composition">Состав</label>
+        <input id="composition" name="composition" value="{{ form.composition }}" />
+      </div>
+      <div>
+        <label for="copies">Копий без ЧЗ</label>
+        <input id="copies" name="copies" type="number" min="1" value="{{ form.copies }}" />
+      </div>
+    </div>
+    <p>
+      <label for="mark_codes">Коды ЧЗ</label>
+      <textarea id="mark_codes" name="mark_codes" spellcheck="false">{{ form.mark_codes }}</textarea>
+    </p>
+    <p>
+      <label for="note_text">Комплектность</label>
+      <textarea id="note_text" name="note_text">{{ form.note_text }}</textarea>
+    </p>
+    <div class="actions">
+      <button type="submit">Предпросмотр</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>WB Marks App</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; background: #f4f5f7; color: #1f2430; }
+      header { background: #1f2937; color: white; padding: 14px 24px; display: flex; gap: 18px; align-items: center; justify-content: space-between; }
+      nav, .header-user { display: flex; gap: 18px; align-items: center; }
+      header a { color: white; text-decoration: none; font-weight: 700; }
+      main { padding: 24px; }
+      .card { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,.06); margin-bottom: 20px; }
+      .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+      label { display: block; font-weight: 600; margin-bottom: 6px; }
+      input, textarea, select { width: 100%; padding: 10px; border: 1px solid #cad1de; border-radius: 8px; box-sizing: border-box; }
+      textarea { min-height: 180px; font-family: Consolas, monospace; }
+      button, .button { background: #276ef1; color: white; border: 0; padding: 10px 14px; border-radius: 8px; cursor: pointer; text-decoration: none; display: inline-block; font: inherit; font-weight: 700; }
+      button.secondary, .button.secondary { background: #56627a; }
+      button.linkish { background: transparent; color: white; padding: 0; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 10px; border-bottom: 1px solid #e6e8f0; vertical-align: top; }
+      .status { font-weight: 700; }
+      .error { color: #b42318; white-space: pre-wrap; }
+      .muted { color: #667085; }
+      .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+      code { background: #eef2ff; padding: 2px 6px; border-radius: 6px; }
+      .form-card { max-width: 480px; margin: 48px auto; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <nav>
+        {% if current_user.id %}
+        <a href="/runs">Запуски</a>
+        <a href="/labels">Этикетки</a>
+        <a href="/settings">Настройки</a>
+        {% else %}
+        <a href="/login">Вход</a>
+        <a href="/register">Регистрация</a>
+        {% endif %}
+      </nav>
+      {% if current_user.id %}
+      <div class="header-user">
+        <span>{{ current_user.login }}</span>
+        <form method="post" action="/logout">
+          <button type="submit" class="linkish">Выйти</button>
+        </form>
+      </div>
+      {% endif %}
+    </header>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

@@ -1,0 +1,30 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="card">
+  <h1>Запуски</h1>
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Draft</th>
+        <th>Статус</th>
+        <th>Ошибка</th>
+        <th>Создан</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in runs %}
+      <tr>
+        <td><a href="/runs/{{ run.id }}">{{ run.id }}</a></td>
+        <td>{{ run.draft_id }}</td>
+        <td class="status">{{ run.status }}</td>
+        <td class="error">{{ run.error }}</td>
+        <td>{{ run.created_at }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="muted">Пока нет запусков.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

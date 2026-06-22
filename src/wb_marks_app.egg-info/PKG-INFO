@@ -1,0 +1,106 @@
+Metadata-Version: 2.4
+Name: wb-marks-app
+Version: 0.1.0
+Summary: Server-side workflow for WB draft supplies, Honest Signs CSV, and Teksher transgran orchestration.
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.116
+Requires-Dist: uvicorn>=0.35
+Requires-Dist: sqlalchemy>=2.0
+Requires-Dist: jinja2>=3.1
+Requires-Dist: python-multipart>=0.0.20
+Requires-Dist: requests>=2.32
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Provides-Extra: legacy-desktop
+Requires-Dist: PySide6>=6.7; extra == "legacy-desktop"
+Requires-Dist: playwright>=1.52; extra == "legacy-desktop"
+
+# WB Marks App
+
+Windows desktop application for:
+
+- loading the latest WB draft supply,
+- mapping `barcode -> gtin`,
+- issuing Honest Signs on `label.teksher.kg`,
+- exporting CSV with issued marks,
+- preparing the `wbarcode.ru` label-generation step.
+
+## Run
+
+```powershell
+python -m pip install -e .
+playwright install chromium
+python -m wb_marks_app
+```
+
+## Teksher API flow
+
+You can run the full API flow without UI clicks. The script can either use a ready `Bearer` token or fetch a fresh one through `oauth/login`.
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m wb_marks_app.teksher_api_cli `
+  issue `
+  --gtin 04700063257354 `
+  --quantity 1 `
+  --username "user02562" `
+  --password "<TEKSHER_PASSWORD>"
+```
+
+The script will:
+
+- create the mark code order,
+- wait until the order becomes `ACCEPTED` and `ready=true`,
+- create the marking operation,
+- download the CSV with marking codes.
+
+To create a transgran operation from a saved CSV:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m wb_marks_app.teksher_api_cli `
+  transgran `
+  --csv "C:\Users\1\Documents\chrome\output\teksher_04700063257354.csv" `
+  --gtin 04700063257354 `
+  --document-number "123" `
+  --document-date "2026-04-24T19:31:39" `
+  --shipment-date "2026-04-24T19:31:41" `
+  --recipient-name "ООО \"РВБ\"" `
+  --recipient-inn "9714053621" `
+  --recipient-kpp "507401001" `
+  --username "user02562" `
+  --password "<TEKSHER_PASSWORD>"
+```
+
+To run the whole chain in one command:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m wb_marks_app.teksher_api_cli `
+  full `
+  --gtin 04700063257354 `
+  --quantity 1 `
+  --document-number "123" `
+  --document-date "2026-04-24T19:31:39" `
+  --shipment-date "2026-04-24T19:31:41" `
+  --recipient-name "ООО \"РВБ\"" `
+  --recipient-inn "9714053621" `
+  --recipient-kpp "507401001" `
+  --username "user02562" `
+  --password "<TEKSHER_PASSWORD>"
+```
+
+## Current status
+
+This repository contains a production-oriented v1 skeleton:
+
+- desktop GUI with saved settings,
+- workflow orchestration and logging,
+- CSV mapping validation,
+- result CSV generation,
+- WB/API/browser service abstractions,
+- Playwright-backed browser session management,
+- manual-step handling for unstable or undocumented site flows.
+
+Site-specific automation for WB seller cabinet, `label.teksher.kg`, and `wbarcode.ru` is intentionally implemented as a safe baseline with extension points. Real selectors, API contracts, and the exact Wbarcode click-path still need to be filled in for your environment.

@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "WB Marks Launcher",
+  "version": "1.0.0",
+  "description": "Injects the 'ВыпуститьЧЗ' button into WB draft pages and opens the server workflow.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": [
+    "https://seller.wildberries.ru/*",
+    "https://seller.wildberries.ru/supplies-management/*",
+    "http://localhost:8000/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://seller.wildberries.ru/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html"
+}

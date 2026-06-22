@@ -1,0 +1,79 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="card">
+  <h1>Запуск {{ run.id }}</h1>
+  <p>Черновик WB: <strong>{{ run.draft_id }}</strong></p>
+  <p>Статус: <span class="status">{{ run.status }}</span></p>
+  {% if run.error %}<p class="error">{{ run.error }}</p>{% endif %}
+  <div class="actions">
+    <form method="post" action="/runs/{{ run.id }}/resume"><button type="submit">Resume</button></form>
+    <form method="post" action="/runs/{{ run.id }}/retry-failed"><button type="submit" class="secondary">Retry failed items</button></form>
+    <form method="post" action="/runs/{{ run.id }}/cancel"><button type="submit" class="secondary">Cancel</button></form>
+    <a class="button" href="/runs/{{ run.id }}/labels">Печать этикеток</a>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Товары</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Артикул</th>
+        <th>Размер</th>
+        <th>GTIN</th>
+        <th>Кол-во</th>
+        <th>Статус</th>
+        <th>Документ</th>
+        <th>CSV</th>
+        <th>Ошибка</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+      <tr>
+        <td>{{ item.vendor_code }}</td>
+        <td>{{ item.size }}</td>
+        <td>{{ item.gtin }}</td>
+        <td>{{ item.quantity }}</td>
+        <td class="status">{{ item.status }}</td>
+        <td>{{ item.document_number }}</td>
+        <td>
+          {% if artifacts.get(item.id) %}
+          <a href="/api/artifacts/{{ artifacts[item.id].id }}">{{ artifacts[item.id].file_name }}</a>
+          {% else %}
+          <span class="muted">-</span>
+          {% endif %}
+        </td>
+        <td class="error">{{ item.error }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Teksher operations</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Тип</th>
+        <th>Внешний ID</th>
+        <th>Статус</th>
+        <th>endAt</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for op in operations %}
+      <tr>
+        <td>{{ op.operation_kind }}</td>
+        <td>{{ op.external_operation_id }}</td>
+        <td>{{ op.status }}</td>
+        <td>{{ op.end_at }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="muted">Операций пока нет.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
