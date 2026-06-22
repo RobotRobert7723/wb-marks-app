@@ -32,14 +32,18 @@ class FakeResponse:
         content: bytes = b"",
         text: str = "",
         headers: dict | None = None,
+        json_error: bool = False,
     ) -> None:
         self.status_code = status_code
         self._json_data = json_data
         self.content = content
         self.text = text or ("" if json_data is None else str(json_data))
         self.headers = headers or {"content-type": "application/json"}
+        self.json_error = json_error
 
     def json(self):
+        if self.json_error:
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
         return self._json_data
 
     def raise_for_status(self) -> None:
@@ -170,9 +174,10 @@ class FakeSessionOrderReadyFalse(FakeSession):
 
 
 class FakeSessionProducts(FakeSession):
-    def __init__(self, existing: bool = False) -> None:
+    def __init__(self, existing: bool = False, empty_create_response: bool = False) -> None:
         super().__init__()
         self.existing = existing
+        self.empty_create_response = empty_create_response
         self.created_payloads: list[dict] = []
 
     def get(self, url, headers=None, timeout=None):
@@ -236,6 +241,8 @@ class FakeSessionProducts(FakeSession):
         self.calls.append(("POST", url, json if json is not None else files))
         if url.endswith("/facade/api/v1/products/create"):
             self.created_payloads.append(json or {})
+            if self.empty_create_response:
+                return FakeResponse(201, text="", json_error=True)
             return FakeResponse(201, json_data={"data": {"id": "draft-1", "status": "DRAFT"}})
         return super().post(url, headers=headers, json=json, files=files, timeout=timeout)
 
@@ -537,6 +544,32 @@ class TeksherServiceTests(unittest.TestCase):
         self.assertEqual(999, payload["tnved"])
         self.assertEqual("ErLine", payload["trademark"])
         self.assertFalse(any(call[0] == "POST" and call[1].endswith("/approve") for call in session.calls))
+
+    def test_ensure_product_drafts_allows_empty_success_create_response(self) -> None:
+        session = FakeSessionProducts(existing=False, empty_create_response=True)
+        service = TeksherService(browser=FakeBrowser(), session=session, sleep=lambda _: None)
+        config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
+
+        draft_ids = service.ensure_product_drafts_for_mapping(
+            _product_card(),
+            [
+                {
+                    "wb_size": "38",
+                    "teksher_size": "38 МЕЖДУНАРОДНЫЙ",
+                    "product_type": "КОСТЮМ СПОРТИВНЫЙ",
+                    "gtin": "04709055620626",
+                    "tnved": "6112120000",
+                    "country": "Кыргызстан",
+                    "color": "БЕЛЫЙ",
+                    "composition": "полиэстер 100%",
+                    "trademark": "ErLine",
+                }
+            ],
+            config,
+        )
+
+        self.assertEqual([""], draft_ids)
+        self.assertEqual(1, len(session.created_payloads))
 
     def test_product_mapping_rows_by_gtins_reads_teksher_product_details(self) -> None:
         session = FakeSessionProducts(existing=True)

@@ -522,7 +522,10 @@ class TeksherService:
             timeout=30,
         )
         self._raise_for_status(response)
-        data = self._json(response)
+        data = self._json_or_empty(response)
+        if data is None:
+            self.logger("Teksher product draft create returned an empty response body.")
+            return ""
         draft_id = self._product_id_from_response(data)
         if not draft_id:
             self.logger(f"Teksher product draft create response did not include id: {data}")
@@ -1185,10 +1188,27 @@ class TeksherService:
         return f"{config.teksher_url.rstrip('/')}{path}"
 
     def _json(self, response: requests.Response) -> dict:
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            body = response.text.strip()
+            if body:
+                raise AppError(f"Teksher API returned a non-JSON response: {response.status_code} {body[:500]}") from exc
+            raise AppError(f"Teksher API returned an empty response: {response.status_code}") from exc
         if not isinstance(payload, dict):
             raise AppError(f"Unexpected Teksher response: {payload!r}")
         return payload
+
+    def _json_or_empty(self, response: requests.Response) -> dict | None:
+        body = response.text.strip()
+        if not body and not response.content:
+            return None
+        try:
+            return self._json(response)
+        except AppError:
+            if not body:
+                return None
+            raise
 
     def _parse_codes(self, csv_bytes: bytes) -> list[str]:
         text = csv_bytes.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
