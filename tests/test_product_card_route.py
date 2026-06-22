@@ -76,6 +76,10 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn("/product-cards/847012873", page.text)
             self.assertIn("Готовы к нанесению", page.text)
             self.assertIn("Заказать в Текшер", page.text)
+            self.assertIn('data-gtin-field="gtin"', page.text)
+            self.assertIn('data-gtin-field="tnved"', page.text)
+            self.assertIn('data-gtin-field="target_gender"', page.text)
+            self.assertIn("function clearGtinTable()", page.text)
 
             client.close()
         finally:

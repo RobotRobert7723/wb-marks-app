@@ -203,12 +203,12 @@
             <td class="teksher-cell" data-gtin-field="teksher_size" title="{{ row.teksher_size }}">{{ row.teksher_size }}</td>
             <td class="teksher-cell" data-gtin-field="product_type" title="{{ row.product_type }}">{{ row.product_type }}</td>
             <td class="teksher-cell" data-gtin-field="gtin" title="{{ row.gtin }}">{{ row.gtin }}</td>
-            <td class="teksher-cell" title="{{ row.tnved }}">{{ row.tnved }}</td>
-            <td class="teksher-cell" title="{{ row.country }}">{{ row.country }}</td>
+            <td class="teksher-cell" data-gtin-field="tnved" title="{{ row.tnved }}">{{ row.tnved }}</td>
+            <td class="teksher-cell" data-gtin-field="country" title="{{ row.country }}">{{ row.country }}</td>
             <td class="teksher-cell" data-gtin-field="vendor_article" title="{{ row.vendor_article }}">{{ row.vendor_article }}</td>
             <td class="teksher-cell" data-gtin-field="color" title="{{ row.color }}">{{ row.color }}</td>
-            <td class="teksher-cell" title="{{ row.composition }}">{{ row.composition }}</td>
-            <td class="teksher-cell" title="{{ row.target_gender }}">{{ row.target_gender }}</td>
+            <td class="teksher-cell" data-gtin-field="composition" title="{{ row.composition }}">{{ row.composition }}</td>
+            <td class="teksher-cell" data-gtin-field="target_gender" title="{{ row.target_gender }}">{{ row.target_gender }}</td>
             <td class="teksher-cell" data-gtin-field="trademark" title="{{ row.trademark }}">{{ row.trademark }}</td>
           </tr>
           {% endfor %}
@@ -317,12 +317,14 @@
       });
       const payload = await response.json();
       if (!response.ok || !payload.ok) {
+        clearGtinTable();
         setStatus(payload.message || 'Не удалось загрузить GTIN файл.', 'error');
         return;
       }
       applyGtinRows(payload.rows || []);
       setStatus(payload.message || 'GTIN загружены.', 'success');
     } catch (error) {
+      clearGtinTable();
       setStatus('Не удалось загрузить GTIN файл.', 'error');
     } finally {
       button.disabled = false;
@@ -331,6 +333,7 @@
   });
 
   function applyGtinRows(rows) {
+    clearGtinTable();
     const bySize = new Map(rows.map((row) => [normalize(row.size), row]));
     document.querySelectorAll('tr[data-wb-size]').forEach((tr) => {
       const row = bySize.get(normalize(tr.dataset.wbSize || ''));
@@ -338,9 +341,20 @@
       setCell(tr, 'teksher_size', row.size ? `${row.size} МЕЖДУНАРОДНЫЙ` : '');
       setCell(tr, 'product_type', (row.functional_name || '').toUpperCase());
       setCell(tr, 'gtin', row.gtin || '');
+      setCell(tr, 'tnved', '');
+      setCell(tr, 'country', '');
       setCell(tr, 'vendor_article', row.vendor_article || '');
       setCell(tr, 'color', (row.color || '').toUpperCase());
+      setCell(tr, 'composition', '');
+      setCell(tr, 'target_gender', '');
       setCell(tr, 'trademark', row.brand || '');
+    });
+  }
+
+  function clearGtinTable() {
+    document.querySelectorAll('[data-gtin-field]').forEach((cell) => {
+      cell.textContent = '';
+      cell.title = '';
     });
   }
 
