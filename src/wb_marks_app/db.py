@@ -48,13 +48,16 @@ def session_scope():
 
 
 def create_all() -> None:
-    from wb_marks_app import server_models  # noqa: F401
+    from wb_marks_app import server_models
 
     engine = get_engine()
     config = load_config()
-    if not config.database_url.startswith("sqlite") and config.database_schema:
+    if not config.database_url.startswith("sqlite"):
         with engine.begin() as conn:
-            conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{config.database_schema}"'))
+            if config.database_schema:
+                conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{config.database_schema}"'))
+            if server_models.TEKSHER_SCHEMA:
+                conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{server_models.TEKSHER_SCHEMA}"'))
     Base.metadata.create_all(bind=engine)
     _run_runtime_migrations(engine, config.database_schema)
 

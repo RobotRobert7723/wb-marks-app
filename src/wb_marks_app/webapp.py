@@ -42,6 +42,7 @@ from wb_marks_app.services.labels import build_manual_labels, labels_to_dicts, m
 from wb_marks_app.services.product_cards import ProductCardTemplateService
 from wb_marks_app.services.server_workflow import LaunchRequest, WorkflowRunService
 from wb_marks_app.services.teksher import TeksherService
+from wb_marks_app.services.teksher_mapping import TeksherMappingService
 from wb_marks_app.services.wb import WBService
 
 
@@ -49,6 +50,7 @@ templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "tem
 workflow_service = WorkflowRunService()
 product_card_service = ProductCardTemplateService()
 gtin_excel_parser = GtinExcelParser()
+teksher_mapping_service = TeksherMappingService()
 
 
 def _raw_settings_dict(settings: AppSettingsModel) -> dict[str, str]:
@@ -412,10 +414,13 @@ def create_app() -> FastAPI:
         with session_scope() as session:
             settings = get_or_create_settings(session, user_id)
             config = settings_to_app_config(settings)
+        product_card = product_card_service.build_template(wb_article, config)
+        with session_scope() as session:
+            product_card = teksher_mapping_service.apply_latest(session, user_id, product_card)
         return templates.TemplateResponse(
             request,
             "product_card.html",
-            _base_context(request, product_card=product_card_service.build_template(wb_article, config)),
+            _base_context(request, product_card=product_card),
         )
 
     @app.post("/api/product-cards/{wb_article}/gtin-upload")
@@ -454,6 +459,42 @@ def create_app() -> FastAPI:
             "message": f"GTIN загружены: {len(matched_rows)} строк.",
             "seller_article": seller_article,
             "rows": [_serialize_gtin_row(row) for row in matched_rows],
+        }
+
+    @app.post("/api/product-cards/{wb_article}/mapping")
+    async def save_product_card_mapping(request: Request, wb_article: str):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        try:
+            payload = await request.json()
+        except ValueError:
+            return JSONResponse({"ok": False, "message": "Некорректный JSON."}, status_code=400)
+        rows = payload.get("rows") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            return JSONResponse({"ok": False, "message": "Нет строк мэппинга для сохранения."}, status_code=400)
+
+        try:
+            with session_scope() as session:
+                settings = get_or_create_settings(session, user_id)
+                config = settings_to_app_config(settings)
+            product_card = product_card_service.build_template(wb_article, config)
+            with session_scope() as session:
+                version, created = teksher_mapping_service.save_version(
+                    session,
+                    user_id,
+                    product_card,
+                    rows,
+                    source=str(payload.get("source") or "product_card"),
+                )
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+
+        return {
+            "ok": True,
+            "message": f"Мэппинг сохранен: версия {version}, строк {created}.",
+            "version": version,
+            "rows_saved": created,
         }
 
     @app.post("/labels/preview", response_class=HTMLResponse)

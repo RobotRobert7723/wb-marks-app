@@ -50,6 +50,8 @@ class ProductCardTemplate:
     api_status: str
     wb_summary: WbProductSummary
     rows: list[ProductCardMappingRow]
+    has_teksher_mapping: bool = False
+    mapping_version: int = 0
 
 
 class ProductCardTemplateService:

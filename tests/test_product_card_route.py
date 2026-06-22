@@ -20,11 +20,13 @@ class ProductCardRouteTests(unittest.TestCase):
         old_get_or_create_settings = webapp.get_or_create_settings
         old_settings_to_app_config = webapp.settings_to_app_config
         old_product_card_service = webapp.product_card_service
+        old_teksher_mapping_service = webapp.teksher_mapping_service
         webapp.create_all = lambda: None
         webapp.load_config = lambda: AppConfig(secret_key="test-secret")
         webapp.session_scope = lambda: FakeSessionScope()
         webapp.get_or_create_settings = lambda _session, _user_id: object()
         webapp.settings_to_app_config = lambda _settings: AppConfig(wb_api_token="token")
+        webapp.teksher_mapping_service = FakeTeksherMappingService()
         webapp.product_card_service = FakeProductCardService(
             ProductCardTemplate(
                 wb_article="847012873",
@@ -82,6 +84,9 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn('data-wb-product-type="Костюмы спортивные"', page.text)
             self.assertIn('data-wb-color="белый"', page.text)
             self.assertIn('data-wb-brand="ErLine"', page.text)
+            self.assertIn('data-has-mapping="false"', page.text)
+            self.assertIn('id="mapping-save-button" class="secondary" disabled', page.text)
+            self.assertIn("Для этой карточки уже есть GTIN. Действительно хотите обновить", page.text)
             self.assertIn("gtin-loaded", page.text)
             self.assertIn("gtin-mismatch", page.text)
             self.assertIn("function setLoadedCell(", page.text)
@@ -95,6 +100,7 @@ class ProductCardRouteTests(unittest.TestCase):
             webapp.get_or_create_settings = old_get_or_create_settings
             webapp.settings_to_app_config = old_settings_to_app_config
             webapp.product_card_service = old_product_card_service
+            webapp.teksher_mapping_service = old_teksher_mapping_service
 
     def test_gtin_upload_returns_rows_for_matching_vendor_article(self) -> None:
         import wb_marks_app.webapp as webapp
@@ -229,6 +235,107 @@ class ProductCardRouteTests(unittest.TestCase):
             webapp.settings_to_app_config = old_settings_to_app_config
             webapp.product_card_service = old_product_card_service
 
+    def test_mapping_save_endpoint_creates_version(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from wb_marks_app.models import AppConfig
+        from wb_marks_app.services.product_cards import ProductCardTemplate, ProductCardMappingRow, WbProductSummary
+
+        old_create_all = webapp.create_all
+        old_load_config = webapp.load_config
+        old_session_scope = webapp.session_scope
+        old_get_or_create_settings = webapp.get_or_create_settings
+        old_settings_to_app_config = webapp.settings_to_app_config
+        old_product_card_service = webapp.product_card_service
+        old_teksher_mapping_service = webapp.teksher_mapping_service
+        fake_mapping_service = FakeTeksherMappingService(version=2)
+        webapp.create_all = lambda: None
+        webapp.load_config = lambda: AppConfig(secret_key="test-secret")
+        webapp.session_scope = lambda: FakeSessionScope()
+        webapp.get_or_create_settings = lambda _session, _user_id: object()
+        webapp.settings_to_app_config = lambda _settings: AppConfig(wb_api_token="token")
+        webapp.teksher_mapping_service = fake_mapping_service
+        webapp.product_card_service = FakeProductCardService(
+            ProductCardTemplate(
+                wb_article="847012873",
+                image_url="",
+                api_status="",
+                wb_summary=WbProductSummary(
+                    name="Sport suit",
+                    seller_category="Sport suits",
+                    wb_article="847012873",
+                    tnved="6112120000",
+                    country="KG",
+                    seller_article="cv_nk_white_smr",
+                    color="white",
+                    composition="polyester 100%",
+                    gender="boys",
+                    brand="ErLine",
+                ),
+                rows=[
+                    ProductCardMappingRow(
+                        barcode="2049271462689",
+                        wb_size="38",
+                        ru_size="134",
+                        teksher_size="",
+                        product_type="",
+                        gtin="",
+                        tnved="",
+                        country="",
+                        vendor_article="",
+                        color="",
+                        composition="",
+                        target_gender="",
+                        trademark="",
+                        ready_to_mark=0,
+                        print_count=0,
+                        order_count=0,
+                    )
+                ],
+            )
+        )
+        try:
+            app = webapp.create_app()
+            client = TestClient(app)
+            client.cookies.set("wb_marks_session", _session_cookie({"user_id": "user-1", "login": "tester"}, "test-secret"))
+
+            response = client.post(
+                "/api/product-cards/847012873/mapping",
+                json={
+                    "source": "gtin_excel",
+                    "rows": [
+                        {
+                            "wb_barcode": "2049271462689",
+                            "wb_size": "38",
+                            "wb_ru_size": "134",
+                            "teksher_size": "38 МЕЖДУНАРОДНЫЙ",
+                            "product_type": "КОСТЮМ СПОРТИВНЫЙ",
+                            "gtin": "04709055620626",
+                            "vendor_article": "cv_nk_white_smr",
+                            "color": "БЕЛЫЙ",
+                            "trademark": "ErLine",
+                        }
+                    ],
+                },
+            )
+
+            self.assertEqual(200, response.status_code)
+            payload = response.json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(2, payload["version"])
+            self.assertEqual(1, payload["rows_saved"])
+            self.assertEqual("user-1", fake_mapping_service.saved[0]["user_id"])
+            self.assertEqual("gtin_excel", fake_mapping_service.saved[0]["source"])
+            self.assertEqual("04709055620626", fake_mapping_service.saved[0]["rows"][0]["gtin"])
+            client.close()
+        finally:
+            webapp.create_all = old_create_all
+            webapp.load_config = old_load_config
+            webapp.session_scope = old_session_scope
+            webapp.get_or_create_settings = old_get_or_create_settings
+            webapp.settings_to_app_config = old_settings_to_app_config
+            webapp.product_card_service = old_product_card_service
+            webapp.teksher_mapping_service = old_teksher_mapping_service
+
 
 class FakeSessionScope:
     def __enter__(self):
@@ -246,6 +353,27 @@ class FakeProductCardService:
     def build_template(self, wb_article, config):
         self.calls.append((wb_article, config))
         return self.product_card
+
+
+class FakeTeksherMappingService:
+    def __init__(self, version: int = 1) -> None:
+        self.version = version
+        self.saved = []
+
+    def apply_latest(self, session, user_id, product_card):
+        return product_card
+
+    def save_version(self, session, user_id, product_card, rows_payload, source="product_card"):
+        self.saved.append(
+            {
+                "session": session,
+                "user_id": user_id,
+                "product_card": product_card,
+                "rows": rows_payload,
+                "source": source,
+            }
+        )
+        return self.version, len(rows_payload)
 
 
 def _build_gtin_upload_workbook(variety: str) -> bytes:

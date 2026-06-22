@@ -34,6 +34,16 @@
   .upload-status { font-weight: 700; margin-top: 12px; }
   .upload-status.error { color: #b42318; }
   .upload-status.success { color: #3f6212; }
+  .upload-confirm {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 12px;
+  }
+  .upload-confirm[hidden] { display: none; }
+  .upload-confirm span { color: #344054; font-weight: 700; }
+  .upload-confirm button { min-width: 72px; padding: 9px 14px; }
   .table-scroll { border: 1px solid #dfe3eb; overflow: auto; }
   .table-scroll.compact-scroll { display: inline-block; max-width: 100%; vertical-align: top; }
   .mapping-table {
@@ -84,6 +94,8 @@
   data-wb-product-type="{{ product_card.wb_summary.seller_category }}"
   data-wb-color="{{ product_card.wb_summary.color }}"
   data-wb-brand="{{ product_card.wb_summary.brand }}"
+  data-has-mapping="{{ 'true' if product_card.has_teksher_mapping else 'false' }}"
+  data-mapping-version="{{ product_card.mapping_version }}"
 >
   <div class="card">
     <div class="product-card-header">
@@ -106,7 +118,12 @@
         <div class="product-actions">
           <button type="button" id="gtin-upload-button">Загрузить GTIN</button>
           <input id="gtin-upload-input" type="file" accept=".xlsx,.xlsm" hidden />
-          <button type="button" class="secondary">Сохранить</button>
+          <button type="button" id="mapping-save-button" class="secondary" disabled>Сохранить</button>
+        </div>
+        <div id="gtin-update-confirm" class="upload-confirm" hidden>
+          <span>Для этой карточки уже есть GTIN. Действительно хотите обновить</span>
+          <button type="button" id="gtin-update-yes">Да</button>
+          <button type="button" id="gtin-update-no" class="secondary">Нет</button>
         </div>
         <div id="gtin-upload-status" class="upload-status" role="status" aria-live="polite"></div>
       </div>
@@ -205,7 +222,7 @@
         </thead>
         <tbody>
           {% for row in product_card.rows %}
-          <tr data-wb-size="{{ row.wb_size }}">
+          <tr data-wb-size="{{ row.wb_size }}" data-wb-barcode="{{ row.barcode }}" data-wb-ru-size="{{ row.ru_size }}">
             <td class="api-cell" title="{{ row.barcode }}">{{ row.barcode }}</td>
             <td class="api-cell" title="{{ row.wb_size }}">{{ row.wb_size }}</td>
             <td class="api-cell" title="{{ row.ru_size }}">{{ row.ru_size }}</td>
@@ -304,12 +321,35 @@
 <script>
 (() => {
   const page = document.querySelector('.product-page');
-  const button = document.getElementById('gtin-upload-button');
+  const uploadButton = document.getElementById('gtin-upload-button');
   const input = document.getElementById('gtin-upload-input');
+  const saveButton = document.getElementById('mapping-save-button');
   const status = document.getElementById('gtin-upload-status');
-  if (!page || !button || !input || !status) return;
+  const confirmBox = document.getElementById('gtin-update-confirm');
+  const confirmYes = document.getElementById('gtin-update-yes');
+  const confirmNo = document.getElementById('gtin-update-no');
+  if (!page || !uploadButton || !input || !saveButton || !status) return;
 
-  button.addEventListener('click', () => input.click());
+  let hasUnsavedGtin = false;
+
+  uploadButton.addEventListener('click', () => {
+    if (page.dataset.hasMapping === 'true') {
+      showUpdateConfirm();
+      return;
+    }
+    openUploadDialog();
+  });
+  if (confirmYes) {
+    confirmYes.addEventListener('click', () => {
+      hideUpdateConfirm();
+      openUploadDialog();
+    });
+  }
+  if (confirmNo) {
+    confirmNo.addEventListener('click', () => hideUpdateConfirm());
+  }
+  saveButton.addEventListener('click', () => saveMapping());
+
   input.addEventListener('change', async () => {
     const file = input.files && input.files[0];
     if (!file) return;
@@ -317,7 +357,7 @@
     const formData = new FormData();
     formData.append('file', file);
     setStatus('Загружаем GTIN...', '');
-    button.disabled = true;
+    uploadButton.disabled = true;
 
     try {
       const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/gtin-upload`, {
@@ -326,20 +366,86 @@
       });
       const payload = await response.json();
       if (!response.ok || !payload.ok) {
-        clearGtinTable();
         setStatus(payload.message || 'Не удалось загрузить GTIN файл.', 'error');
         return;
       }
       applyGtinRows(payload.rows || []);
+      setUnsaved(true);
       setStatus(payload.message || 'GTIN загружены.', 'success');
     } catch (error) {
-      clearGtinTable();
       setStatus('Не удалось загрузить GTIN файл.', 'error');
     } finally {
-      button.disabled = false;
+      uploadButton.disabled = false;
       input.value = '';
     }
   });
+
+  async function saveMapping() {
+    if (!hasUnsavedGtin) return;
+    hideUpdateConfirm();
+    setStatus('Сохраняем мэппинг...', '');
+    saveButton.disabled = true;
+    uploadButton.disabled = true;
+
+    try {
+      const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/mapping`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: 'gtin_excel', rows: collectMappingRows() }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        setStatus(payload.message || 'Не удалось сохранить мэппинг.', 'error');
+        return;
+      }
+      markMappingSaved();
+      page.dataset.hasMapping = 'true';
+      page.dataset.mappingVersion = String(payload.version || '');
+      setUnsaved(false);
+      setStatus(payload.message || 'Мэппинг сохранен.', 'success');
+    } catch (error) {
+      setStatus('Не удалось сохранить мэппинг.', 'error');
+    } finally {
+      uploadButton.disabled = false;
+      saveButton.disabled = !hasUnsavedGtin;
+    }
+  }
+
+  function openUploadDialog() {
+    input.click();
+  }
+
+  function showUpdateConfirm() {
+    if (!confirmBox) {
+      openUploadDialog();
+      return;
+    }
+    confirmBox.hidden = false;
+    setStatus('', '');
+  }
+
+  function hideUpdateConfirm() {
+    if (confirmBox) confirmBox.hidden = true;
+  }
+
+  function setUnsaved(value) {
+    hasUnsavedGtin = value;
+    saveButton.disabled = !value;
+  }
+
+  function collectMappingRows() {
+    return Array.from(document.querySelectorAll('tr[data-wb-size]')).map((tr) => {
+      const row = {
+        wb_barcode: tr.dataset.wbBarcode || '',
+        wb_size: tr.dataset.wbSize || '',
+        wb_ru_size: tr.dataset.wbRuSize || '',
+      };
+      tr.querySelectorAll('[data-gtin-field]').forEach((cell) => {
+        row[cell.dataset.gtinField] = cell.textContent.trim();
+      });
+      return row;
+    });
+  }
 
   function applyGtinRows(rows) {
     clearGtinTable();
@@ -365,6 +471,12 @@
     document.querySelectorAll('[data-gtin-field]').forEach((cell) => {
       cell.textContent = '';
       cell.title = '';
+      cell.classList.remove('gtin-loaded', 'gtin-mismatch');
+    });
+  }
+
+  function markMappingSaved() {
+    document.querySelectorAll('[data-gtin-field]').forEach((cell) => {
       cell.classList.remove('gtin-loaded', 'gtin-mismatch');
     });
   }
