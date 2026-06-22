@@ -38,6 +38,7 @@ from wb_marks_app.server_settings import (
 )
 from wb_marks_app.services.browser import BrowserSessionManager
 from wb_marks_app.services.labels import build_manual_labels, labels_to_dicts, make_label_record
+from wb_marks_app.services.product_cards import ProductCardTemplateService
 from wb_marks_app.services.server_workflow import LaunchRequest, WorkflowRunService
 from wb_marks_app.services.teksher import TeksherService
 from wb_marks_app.services.wb import WBService
@@ -45,6 +46,7 @@ from wb_marks_app.services.wb import WBService
 
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 workflow_service = WorkflowRunService()
+product_card_service = ProductCardTemplateService()
 
 
 def _raw_settings_dict(settings: AppSettingsModel) -> dict[str, str]:
@@ -407,7 +409,7 @@ def create_app() -> FastAPI:
         return templates.TemplateResponse(
             request,
             "product_card.html",
-            _base_context(request, product_card=_default_product_card(wb_article)),
+            _base_context(request, product_card=product_card_service.build_template(wb_article)),
         )
 
     @app.post("/labels/preview", response_class=HTMLResponse)
@@ -708,101 +710,6 @@ def _default_label_form() -> dict:
         "unit_count": "1",
         "copies": 1,
         "note_text": "",
-    }
-
-
-def _default_product_card(wb_article: str) -> dict:
-    rows = [
-        {
-            "barcode": "2049271462689",
-            "wb_size": "38",
-            "ru_size": "134",
-            "teksher_size": "38 МЕЖДУНАРОДНЫЙ",
-            "product_type": "КОСТЮМ СПОРТИВНЫЙ",
-            "gtin": "4709055620220",
-            "tnved": "6209200000",
-            "country": "Кыргызстан",
-            "vendor_article": "Арт.777-erl_22",
-            "color": "БЕЛЫЙ",
-            "composition": "полиэстер 100%",
-            "target_gender": "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)",
-            "trademark": "ErLine",
-            "ready_to_mark": 23,
-            "print_count": 0,
-            "order_count": 0,
-        },
-        {
-            "barcode": "2049271462672",
-            "wb_size": "40",
-            "ru_size": "140",
-            "teksher_size": "40 МЕЖДУНАРОДНЫЙ",
-            "product_type": "КОСТЮМ СПОРТИВНЫЙ",
-            "gtin": "4709055620220",
-            "tnved": "6209200000",
-            "country": "Кыргызстан",
-            "vendor_article": "Арт.777-erl_22",
-            "color": "БЕЛЫЙ",
-            "composition": "полиэстер 100%",
-            "target_gender": "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)",
-            "trademark": "ErLine",
-            "ready_to_mark": 0,
-            "print_count": 0,
-            "order_count": 0,
-        },
-        {
-            "barcode": "2049271462696",
-            "wb_size": "42",
-            "ru_size": "146",
-            "teksher_size": "42 МЕЖДУНАРОДНЫЙ",
-            "product_type": "КОСТЮМ СПОРТИВНЫЙ",
-            "gtin": "4709055620220",
-            "tnved": "6209200000",
-            "country": "Кыргызстан",
-            "vendor_article": "Арт.777-erl_22",
-            "color": "БЕЛЫЙ",
-            "composition": "полиэстер 100%",
-            "target_gender": "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)",
-            "trademark": "ErLine",
-            "ready_to_mark": 23,
-            "print_count": 0,
-            "order_count": 0,
-        },
-        {
-            "barcode": "2049271462702",
-            "wb_size": "44",
-            "ru_size": "152",
-            "teksher_size": "44 МЕЖДУНАРОДНЫЙ",
-            "product_type": "КОСТЮМ СПОРТИВНЫЙ",
-            "gtin": "4709055620220",
-            "tnved": "6209200000",
-            "country": "Кыргызстан",
-            "vendor_article": "Арт.777-erl_22",
-            "color": "БЕЛЫЙ",
-            "composition": "полиэстер 100%",
-            "target_gender": "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)",
-            "trademark": "ErLine",
-            "ready_to_mark": 23,
-            "print_count": 0,
-            "order_count": 0,
-        },
-    ]
-    return {
-        "wb_article": wb_article.strip(),
-        "image_url": "",
-        "api_status": "Ожидает загрузки из WB API и плагина",
-        "wb_summary": {
-            "name": "Спортивный костюм Nike на молнии с капюшоном",
-            "seller_category": "Костюмы спортивные",
-            "wb_article": wb_article.strip(),
-            "tnved": "6112120000",
-            "country": "Кыргызстан",
-            "seller_article": "cv_nk_white_smr",
-            "color": "белый",
-            "composition": "полиэстер 100%",
-            "gender": "мальчики",
-            "brand": "ErLine",
-        },
-        "rows": rows,
     }
 
 

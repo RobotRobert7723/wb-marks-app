@@ -1,39 +1,24 @@
-import os
-from pathlib import Path
-from tempfile import TemporaryDirectory
+import json
 import unittest
+from base64 import b64encode
 
 from fastapi.testclient import TestClient
+from itsdangerous import TimestampSigner
 
 
 class ProductCardRouteTests(unittest.TestCase):
     def test_product_card_page_uses_wb_article_from_url(self) -> None:
-        old_database_url = os.environ.get("DATABASE_URL")
-        old_database_schema = os.environ.get("DATABASE_SCHEMA")
-        with TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "app.db"
-            os.environ["DATABASE_URL"] = f"sqlite:///{db_path.as_posix()}"
-            os.environ["DATABASE_SCHEMA"] = ""
+        import wb_marks_app.webapp as webapp
+        from wb_marks_app.models import AppConfig
 
-            from wb_marks_app import db
-            from wb_marks_app.webapp import create_app
-
-            if db._engine is not None:
-                db._engine.dispose()
-            db._engine = None
-            db._session_factory = None
-            client = TestClient(create_app())
-
-            register = client.post(
-                "/register",
-                data={
-                    "email": "user@example.com",
-                    "login": "user1",
-                    "password": "password123",
-                    "password_confirm": "password123",
-                },
-            )
-            self.assertEqual(200, register.status_code)
+        old_create_all = webapp.create_all
+        old_load_config = webapp.load_config
+        webapp.create_all = lambda: None
+        webapp.load_config = lambda: AppConfig(secret_key="test-secret")
+        try:
+            app = webapp.create_app()
+            client = TestClient(app)
+            client.cookies.set("wb_marks_session", _session_cookie({"user_id": "user-1", "login": "tester"}, "test-secret"))
 
             page = client.get("/product-cards/847012873")
             self.assertEqual(200, page.status_code)
@@ -44,18 +29,14 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn("Заказать в Текшер", page.text)
 
             client.close()
-            if db._engine is not None:
-                db._engine.dispose()
-            db._engine = None
-            db._session_factory = None
-        if old_database_url is None:
-            os.environ.pop("DATABASE_URL", None)
-        else:
-            os.environ["DATABASE_URL"] = old_database_url
-        if old_database_schema is None:
-            os.environ.pop("DATABASE_SCHEMA", None)
-        else:
-            os.environ["DATABASE_SCHEMA"] = old_database_schema
+        finally:
+            webapp.create_all = old_create_all
+            webapp.load_config = old_load_config
+
+
+def _session_cookie(payload: dict[str, str], secret_key: str) -> str:
+    data = b64encode(json.dumps(payload).encode("utf-8"))
+    return TimestampSigner(secret_key).sign(data).decode("utf-8")
 
 
 if __name__ == "__main__":
