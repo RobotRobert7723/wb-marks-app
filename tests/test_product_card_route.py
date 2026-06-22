@@ -79,6 +79,12 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn('data-gtin-field="gtin"', page.text)
             self.assertIn('data-gtin-field="tnved"', page.text)
             self.assertIn('data-gtin-field="target_gender"', page.text)
+            self.assertIn('data-wb-product-type="Костюмы спортивные"', page.text)
+            self.assertIn('data-wb-color="белый"', page.text)
+            self.assertIn('data-wb-brand="ErLine"', page.text)
+            self.assertIn("gtin-loaded", page.text)
+            self.assertIn("gtin-mismatch", page.text)
+            self.assertIn("function setLoadedCell(", page.text)
             self.assertIn("function clearGtinTable()", page.text)
 
             client.close()

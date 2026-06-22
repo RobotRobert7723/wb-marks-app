@@ -60,6 +60,8 @@
   .mapping-table .api-cell { background: #f2f3f5; }
   .mapping-table .teksher-cell { background: #f8fbf1; }
   .mapping-table .template-cell { background: #f2f7ff; }
+  .mapping-table .gtin-loaded { font-weight: 700; }
+  .mapping-table .gtin-mismatch { color: #b42318; font-weight: 700; }
   .mapping-table .number { text-align: right; }
   .wb-summary-table { min-width: 1380px; }
   .wb-teksher-table { min-width: 1660px; }
@@ -75,7 +77,14 @@
   }
 </style>
 
-<div class="product-page" data-wb-article="{{ product_card.wb_article }}" data-seller-article="{{ product_card.wb_summary.seller_article }}">
+<div
+  class="product-page"
+  data-wb-article="{{ product_card.wb_article }}"
+  data-seller-article="{{ product_card.wb_summary.seller_article }}"
+  data-wb-product-type="{{ product_card.wb_summary.seller_category }}"
+  data-wb-color="{{ product_card.wb_summary.color }}"
+  data-wb-brand="{{ product_card.wb_summary.brand }}"
+>
   <div class="card">
     <div class="product-card-header">
       <div class="product-image" aria-label="Фото товара WB">
@@ -335,19 +344,20 @@
   function applyGtinRows(rows) {
     clearGtinTable();
     const bySize = new Map(rows.map((row) => [normalize(row.size), row]));
+    const wbCompare = {
+      product_type: page.dataset.wbProductType || '',
+      color: page.dataset.wbColor || '',
+      trademark: page.dataset.wbBrand || '',
+    };
     document.querySelectorAll('tr[data-wb-size]').forEach((tr) => {
       const row = bySize.get(normalize(tr.dataset.wbSize || ''));
       if (!row) return;
-      setCell(tr, 'teksher_size', row.size ? `${row.size} МЕЖДУНАРОДНЫЙ` : '');
-      setCell(tr, 'product_type', (row.functional_name || '').toUpperCase());
-      setCell(tr, 'gtin', row.gtin || '');
-      setCell(tr, 'tnved', '');
-      setCell(tr, 'country', '');
-      setCell(tr, 'vendor_article', row.vendor_article || '');
-      setCell(tr, 'color', (row.color || '').toUpperCase());
-      setCell(tr, 'composition', '');
-      setCell(tr, 'target_gender', '');
-      setCell(tr, 'trademark', row.brand || '');
+      setLoadedCell(tr, 'teksher_size', row.size ? `${row.size} МЕЖДУНАРОДНЫЙ` : '');
+      setLoadedCell(tr, 'product_type', (row.functional_name || '').toUpperCase(), row.functional_name || '', wbCompare.product_type);
+      setLoadedCell(tr, 'gtin', row.gtin || '');
+      setLoadedCell(tr, 'vendor_article', row.vendor_article || '');
+      setLoadedCell(tr, 'color', (row.color || '').toUpperCase(), row.color || '', wbCompare.color);
+      setLoadedCell(tr, 'trademark', row.brand || '', row.brand || '', wbCompare.trademark);
     });
   }
 
@@ -355,14 +365,25 @@
     document.querySelectorAll('[data-gtin-field]').forEach((cell) => {
       cell.textContent = '';
       cell.title = '';
+      cell.classList.remove('gtin-loaded', 'gtin-mismatch');
     });
   }
 
-  function setCell(row, field, value) {
+  function setLoadedCell(row, field, value, compareValue, wbValue) {
+    const hasValue = Boolean(String(value || '').trim());
+    const shouldCompare = arguments.length >= 5 && hasValue && Boolean(String(wbValue || '').trim());
+    const mismatch = shouldCompare && normalizeComparable(compareValue) !== normalizeComparable(wbValue);
+    setCell(row, field, value, { loaded: hasValue, mismatch });
+  }
+
+  function setCell(row, field, value, options = {}) {
     const cell = row.querySelector(`[data-gtin-field="${field}"]`);
     if (!cell) return;
     cell.textContent = value || '';
     cell.title = value || '';
+    cell.classList.remove('gtin-loaded', 'gtin-mismatch');
+    if (options.loaded) cell.classList.add('gtin-loaded');
+    if (options.mismatch) cell.classList.add('gtin-mismatch');
   }
 
   function setStatus(message, kind) {
@@ -372,6 +393,15 @@
 
   function normalize(value) {
     return String(value || '').trim().toLowerCase();
+  }
+
+  function normalizeComparable(value) {
+    return String(value || '')
+      .replace(/ё/g, 'е')
+      .replace(/Ё/g, 'Е')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
   }
 })();
 </script>
