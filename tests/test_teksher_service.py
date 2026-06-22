@@ -10,6 +10,7 @@ from wb_marks_app.models import AppConfig, MarkingTask
 from wb_marks_app.services.product_cards import ProductCardMappingRow, ProductCardTemplate, WbProductSummary
 from wb_marks_app.services.teksher import (
     ExistingTeksherProductError,
+    TEKSHER_CLOTHING_REGULATION,
     TEKSHER_EXISTING_PRODUCT_MESSAGE,
     TeksherService,
 )
@@ -227,19 +228,17 @@ class FakeSessionProducts(FakeSession):
                     }
                 },
             )
-        if url.endswith("/facade/api/v1/participants/manufacturer_info"):
+        if "/facade/api/v1/participants/manufacturer_info" in url:
             return FakeResponse(
                 200,
                 json_data={
                     "data": {
                         "manufacturerFullName": "ОсОО ЭрЛайн",
                         "manufacturerInn": "12345678901234",
-                        "gcp": "470905562",
-                        "gln": "4709055620001",
                     }
                 },
             )
-        if url.endswith("/facade/api/v1/tnveds"):
+        if "/facade/api/v1/tnveds" in url:
             return FakeResponse(200, json_data={"data": [{"id": 999, "code": "6112120000"}]})
         if url.endswith("/facade/api/v1/countries"):
             return FakeResponse(200, json_data={"data": [{"id": 199, "name": "Кыргызстан", "alpha2": "KG"}]})
@@ -529,7 +528,7 @@ class TeksherServiceTests(unittest.TestCase):
                     "wb_size": "38",
                     "teksher_size": "38 МЕЖДУНАРОДНЫЙ",
                     "product_type": "КОСТЮМ СПОРТИВНЫЙ",
-                    "gtin": "04709055620626",
+                    "gtin": "4709055620626",
                     "tnved": "6112120000",
                     "country": "Кыргызстан",
                     "color": "БЕЛЫЙ",
@@ -547,10 +546,21 @@ class TeksherServiceTests(unittest.TestCase):
         self.assertEqual("ОсОО ЭрЛайн", payload["manufacturerFullName"])
         self.assertEqual("12345678901234", payload["manufacturerInn"])
         self.assertEqual("470905562", payload["gcp"])
-        self.assertEqual("4709055620001", payload["gln"])
+        self.assertEqual("4709055620008", payload["gln"])
         self.assertEqual(199, payload["manufacturedCountryId"])
         self.assertEqual(999, payload["tnved"])
         self.assertEqual("ErLine", payload["trademark"])
+        self.assertNotIn("isImport", payload)
+        attributes = {attribute["attributeTypeCode"]: attribute for attribute in payload["attributes"]}
+        self.assertEqual("КОСТЮМ СПОРТИВНЫЙ", attributes["12"]["value"])
+        self.assertEqual("38", attributes["35"]["value"])
+        self.assertEqual("МЕЖДУНАРОДНЫЙ", attributes["35"]["unitCode"])
+        self.assertEqual("БЕЛЫЙ", attributes["36"]["value"])
+        self.assertEqual("полиэстер 100%", attributes["2483"]["value"])
+        self.assertEqual("МУЖСКОЙ", attributes["14013"]["value"])
+        self.assertEqual("cv_nk_white_smr", attributes["13914"]["value"])
+        self.assertEqual("Артикул", attributes["13914"]["unitCode"])
+        self.assertEqual(TEKSHER_CLOTHING_REGULATION, attributes["13836"]["value"])
         self.assertFalse(any(call[0] == "POST" and call[1].endswith("/approve") for call in session.calls))
 
     def test_ensure_product_drafts_allows_empty_success_create_response(self) -> None:

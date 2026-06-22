@@ -40,6 +40,15 @@ from wb_marks_app.services.browser import BrowserSessionManager
 Logger = Callable[[str], None]
 
 TEKSHER_EXISTING_PRODUCT_MESSAGE = "В Текшер уже есть карточка с этим GTIN, данные НЕ СОХРАНЕНЫ"
+TEKSHER_DEFAULT_GCP_LENGTH = 9
+TEKSHER_SIZE_UNIT_INTERNATIONAL = "\u041c\u0415\u0416\u0414\u0423\u041d\u0410\u0420\u041e\u0414\u041d\u042b\u0419"
+TEKSHER_VENDOR_ARTICLE_UNIT = "\u0410\u0440\u0442\u0438\u043a\u0443\u043b"
+TEKSHER_CLOTHING_REGULATION = (
+    "\u0422\u0420 \u0422\u0421 017/2011 "
+    '"\u041e \u0411\u0415\u0417\u041e\u041f\u0410\u0421\u041d\u041e\u0421\u0422\u0418 '
+    "\u041f\u0420\u041e\u0414\u0423\u041a\u0426\u0418\u0418 \u041b\u0415\u0413\u041a\u041e\u0419 "
+    '\u041f\u0420\u041e\u041c\u042b\u0428\u041b\u0415\u041d\u041d\u041e\u0421\u0422\u0418"'
+)
 
 
 class ExistingTeksherProductError(AppError):
@@ -121,7 +130,7 @@ class TeksherService:
 
         self.ensure_authenticated(config)
         for row in rows:
-            gtin = self._text(row.get("gtin"))
+            gtin = self._teksher_gtin(row.get("gtin"))
             if self._product_exists_by_gtin(gtin, config):
                 raise ExistingTeksherProductError(TEKSHER_EXISTING_PRODUCT_MESSAGE)
 
@@ -145,13 +154,17 @@ class TeksherService:
         self.ensure_authenticated(config)
         result: dict[str, dict] = {}
         for gtin in self._unique_values(gtins):
-            product = self._product_by_gtin(gtin, config)
+            query_gtin = self._teksher_gtin(gtin)
+            product = self._product_by_gtin(query_gtin, config)
             if product is None:
                 continue
             row = self._product_mapping_row(product, config)
-            row_gtin = self._text(row.get("gtin")) or gtin
+            row_gtin = self._text(row.get("gtin")) or query_gtin or gtin
             row["gtin"] = row_gtin
             result[row_gtin] = row
+            result[gtin] = row
+            if query_gtin != gtin:
+                result[query_gtin] = row
         return result
 
     def create_mark_code_order(self, gtin: str, quantity: int, config: AppConfig) -> str:
@@ -274,7 +287,8 @@ class TeksherService:
         return result
 
     def _product_exists_by_gtin(self, gtin: str, config: AppConfig) -> bool:
-        normalized_gtin = self._text(gtin)
+        normalized_gtin = self._teksher_gtin(gtin)
+        original_gtin = self._text(gtin)
         if not normalized_gtin:
             return False
         response = self.session.get(
@@ -288,12 +302,13 @@ class TeksherService:
             return False
         for record in self._extract_records(payload):
             for key in ("gtin", "GTIN", "gtinCode", "productGtin"):
-                if self._text(record.get(key)) == normalized_gtin:
+                if self._text(record.get(key)) in {normalized_gtin, original_gtin}:
                     return True
         return False
 
     def _product_by_gtin(self, gtin: str, config: AppConfig) -> dict | None:
-        normalized_gtin = self._text(gtin)
+        normalized_gtin = self._teksher_gtin(gtin)
+        original_gtin = self._text(gtin)
         if not normalized_gtin:
             return None
         response = self.session.get(
@@ -307,9 +322,10 @@ class TeksherService:
             return None
         product = None
         for record in self._extract_product_records(payload):
-            if self._text(
+            candidate = self._text(
                 record.get("gtin") or record.get("GTIN") or record.get("gtinCode") or record.get("productGtin")
-            ) == normalized_gtin:
+            )
+            if candidate in {normalized_gtin, original_gtin}:
                 product = record
                 break
         if product is None:
@@ -544,41 +560,106 @@ class TeksherService:
     ) -> dict:
         tnved = self._text(row.get("tnved")) or self._text(product_card.wb_summary.tnved)
         country = self._text(row.get("country")) or self._text(product_card.wb_summary.country)
+        gtin = self._teksher_gtin(row.get("gtin"))
+        manufacturer = self._manufacturer_fields_for_gtin(manufacturer_info, gtin)
         payload = {
-            "gtin": self._text(row.get("gtin")),
+            "gtin": gtin,
             "fullName": self._product_full_name(product_card, row),
-            "manufacturerFullName": manufacturer_info["manufacturerFullName"],
-            "manufacturerInn": manufacturer_info["manufacturerInn"],
-            "gcp": manufacturer_info["gcp"],
-            "gln": manufacturer_info["gln"],
+            "manufacturerFullName": manufacturer["manufacturerFullName"],
+            "manufacturerInn": manufacturer["manufacturerInn"],
+            "gcp": manufacturer["gcp"],
+            "gln": manufacturer["gln"],
             "manufacturedCountryId": self._resolve_country_id(country, config),
             "tnved": self._resolve_tnved_id(tnved, config),
             "trademark": self._text(row.get("trademark")) or self._text(product_card.wb_summary.brand),
-            "isImport": False,
+            "attributes": self._product_draft_attributes(product_card, row),
         }
         return payload
 
     def _product_full_name(self, product_card, row: dict) -> str:
-        values = [
-            self._text(row.get("product_type")) or self._text(product_card.wb_summary.name),
-            self._text(row.get("teksher_size")) or self._text(row.get("wb_size")),
-            self._text(row.get("color")),
-            self._text(row.get("composition")) or self._text(product_card.wb_summary.composition),
-        ]
-        full_name = " ".join(value for value in values if value)
+        full_name = (
+            self._text(row.get("full_name"))
+            or self._text(row.get("functional_name"))
+            or self._text(row.get("product_type"))
+            or self._text(product_card.wb_summary.name)
+        )
         if full_name:
             return full_name
         return f"WB {self._text(product_card.wb_article)} {self._text(row.get('gtin'))}".strip()
 
+    def _product_draft_attributes(self, product_card, row: dict) -> list[dict]:
+        attributes: list[dict] = []
+        product_type = self._text(row.get("product_type")) or self._text(product_card.wb_summary.seller_category).upper()
+        size_value, size_unit = self._teksher_size_parts(
+            self._text(row.get("teksher_size")) or self._text(row.get("wb_size"))
+        )
+        color = self._text(row.get("color")) or self._text(product_card.wb_summary.color).upper()
+        composition = self._text(row.get("composition")) or self._text(product_card.wb_summary.composition)
+        target_gender = self._text(row.get("target_gender")) or self._target_gender_for_create(product_card.wb_summary.gender)
+        vendor_article = self._text(row.get("vendor_article")) or self._text(product_card.wb_summary.seller_article)
+
+        self._append_product_attribute(attributes, "12", product_type)
+        self._append_product_attribute(attributes, "35", size_value, size_unit)
+        self._append_product_attribute(attributes, "36", color)
+        self._append_product_attribute(attributes, "2483", composition)
+        self._append_product_attribute(attributes, "14013", target_gender)
+        self._append_product_attribute(attributes, "13914", vendor_article, TEKSHER_VENDOR_ARTICLE_UNIT)
+        self._append_product_attribute(attributes, "13836", TEKSHER_CLOTHING_REGULATION)
+        return attributes
+
+    def _append_product_attribute(
+        self,
+        attributes: list[dict],
+        code: str,
+        value: str,
+        unit_code: str = "",
+    ) -> None:
+        text = self._text(value)
+        if not text:
+            return
+        attributes.append(
+            {
+                "attributeTypeCode": code,
+                "value": text,
+                "unitCode": self._text(unit_code),
+                "dataType": 0,
+            }
+        )
+
+    def _teksher_size_parts(self, value: str) -> tuple[str, str]:
+        text = self._text(value)
+        if not text:
+            return "", ""
+        normalized_unit = self._normalize_match(TEKSHER_SIZE_UNIT_INTERNATIONAL)
+        parts = text.rsplit(" ", 1)
+        if len(parts) == 2 and self._normalize_match(parts[1]) == normalized_unit:
+            return parts[0].strip(), TEKSHER_SIZE_UNIT_INTERNATIONAL
+        return text, TEKSHER_SIZE_UNIT_INTERNATIONAL
+
     def _manufacturer_create_fields(self, config: AppConfig) -> dict[str, str]:
         response = self.session.get(
-            self._url(config, "/facade/api/v1/participants/manufacturer_info"),
+            self._url(config, "/facade/api/v1/participants/manufacturer_info?isPresentManufacturerInfo=true"),
             headers=self._headers(config),
             timeout=30,
         )
         self._raise_for_status(response)
-        payload = self._json(response)
+        payload = self._json_or_empty(response)
         data = payload.get("data") if isinstance(payload, dict) else payload
+        manufacturer = self._manufacturer_fields_from_payload(data)
+        if not manufacturer["manufacturerFullName"] or not manufacturer["manufacturerInn"]:
+            fallback = self._current_user_participant_fields(config)
+            for key, value in fallback.items():
+                manufacturer[key] = manufacturer[key] or value
+        missing = [key for key in ("manufacturerFullName", "manufacturerInn") if not manufacturer[key]]
+        if missing:
+            raise AppError(
+                "Не удалось получить реквизиты производителя Текшер для создания карточки: "
+                + ", ".join(missing)
+                + "."
+            )
+        return manufacturer
+
+    def _manufacturer_fields_from_payload(self, data) -> dict[str, str]:
         manufacturer = {
             "manufacturerFullName": self._participant_value(
                 data,
@@ -603,7 +684,26 @@ class TeksherService:
             "gln": self._participant_value(data, "gln", "globalLocationNumber")
             or self._identifier_value(data, "gln", "globallocationnumber"),
         }
-        missing = [key for key, value in manufacturer.items() if not value]
+        return manufacturer
+
+    def _current_user_participant_fields(self, config: AppConfig) -> dict[str, str]:
+        response = self.session.get(
+            self._url(config, "/facade/api/v1/users/getCurrentUser"),
+            headers=self._headers(config),
+            timeout=30,
+        )
+        self._raise_for_status(response)
+        payload = self._json_or_empty(response)
+        data = payload.get("data") if isinstance(payload, dict) else payload
+        if isinstance(data, dict) and isinstance(data.get("participant"), dict):
+            return self._manufacturer_fields_from_payload(data["participant"])
+        return self._manufacturer_fields_from_payload(data)
+
+    def _manufacturer_fields_for_gtin(self, manufacturer_info: dict[str, str], gtin: str) -> dict[str, str]:
+        manufacturer = dict(manufacturer_info)
+        manufacturer["gcp"] = self._text(manufacturer.get("gcp")) or self._derive_gcp_from_gtin(gtin)
+        manufacturer["gln"] = self._text(manufacturer.get("gln")) or self._derive_gln_from_gcp(manufacturer["gcp"])
+        missing = [key for key, value in manufacturer.items() if not self._text(value)]
         if missing:
             raise AppError(
                 "Не удалось получить реквизиты производителя Текшер для создания карточки: "
@@ -611,6 +711,48 @@ class TeksherService:
                 + "."
             )
         return manufacturer
+
+    def _derive_gcp_from_gtin(self, gtin: str) -> str:
+        digits = self._digits(gtin)
+        if len(digits) == 14 and digits.startswith("0"):
+            digits = digits[1:]
+        if len(digits) < TEKSHER_DEFAULT_GCP_LENGTH:
+            return ""
+        return digits[:TEKSHER_DEFAULT_GCP_LENGTH]
+
+    def _derive_gln_from_gcp(self, gcp: str) -> str:
+        digits = self._digits(gcp)
+        if not digits:
+            return ""
+        base = (digits + "0" * 12)[:12]
+        return base + self._gs1_check_digit(base)
+
+    def _teksher_gtin(self, value) -> str:
+        text = self._text(value)
+        digits = self._digits(text)
+        if len(digits) == 13:
+            return "0" + digits
+        if len(digits) == 14:
+            return digits
+        return text
+
+    def _gs1_check_digit(self, base: str) -> str:
+        total = 0
+        for index, char in enumerate(reversed(self._digits(base))):
+            total += int(char) * (3 if index % 2 == 0 else 1)
+        return str((10 - total % 10) % 10)
+
+    def _target_gender_for_create(self, value: str) -> str:
+        text = self._text(value)
+        normalized = self._normalize_match(text)
+        mapping = {
+            self._normalize_match("\u043c\u0430\u043b\u044c\u0447\u0438\u043a\u0438"): "\u041c\u0423\u0416\u0421\u041a\u041e\u0419",
+            self._normalize_match("\u0434\u0435\u0432\u043e\u0447\u043a\u0438"): "\u0416\u0415\u041d\u0421\u041a\u0418\u0419",
+            self._normalize_match("\u043c\u0443\u0436\u0441\u043a\u043e\u0439"): "\u041c\u0423\u0416\u0421\u041a\u041e\u0419",
+            self._normalize_match("\u0436\u0435\u043d\u0441\u043a\u0438\u0439"): "\u0416\u0415\u041d\u0421\u041a\u0418\u0419",
+            self._normalize_match("\u0434\u0435\u0442\u0441\u043a\u0438\u0439"): "\u0423\u041d\u0418\u0412\u0415\u0420\u0421\u0410\u041b\u042c\u041d\u042b\u0419 (\u0423\u041d\u0418\u0421\u0415\u041a\u0421)",
+        }
+        return mapping.get(normalized, text)
 
     def _participant_value(self, payload, *keys: str) -> str:
         for requested_key in keys:
@@ -643,6 +785,20 @@ class TeksherService:
         return ""
 
     def _resolve_tnved_id(self, value: str, config: AppConfig) -> int:
+        digits = self._digits(value)
+        if digits:
+            try:
+                return self._dictionary_id(
+                    value,
+                    self._dictionary_items(
+                        f"/facade/api/v1/tnveds?page=0&size=10&tnvedCode={quote(digits)}&rootCode=",
+                        config,
+                    ),
+                    ("code", "tnved", "tnvedCode", "name", "title", "label", "value"),
+                    "ТНВЭД",
+                )
+            except AppError:
+                pass
         return self._dictionary_id(
             value,
             self._dictionary_items("/facade/api/v1/tnveds", config),
