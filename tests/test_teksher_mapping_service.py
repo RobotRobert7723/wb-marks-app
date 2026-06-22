@@ -67,6 +67,44 @@ def test_save_version_and_apply_latest_mapping() -> None:
     assert mapped_card.rows[0].color == "БЕЛЫЙ"
 
 
+def test_save_version_fills_missing_values_from_wb() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    service = TeksherMappingService()
+    product_card = _product_card(gender="мальчики")
+
+    with Session(engine) as session:
+        service.save_version(
+            session,
+            "user-1",
+            product_card,
+            [
+                {
+                    "wb_barcode": "2049271462689",
+                    "wb_size": "38",
+                    "wb_ru_size": "134",
+                    "teksher_size": "38 МЕЖДУНАРОДНЫЙ",
+                    "product_type": "КОСТЮМ СПОРТИВНЫЙ",
+                    "gtin": "04709055620626",
+                    "vendor_article": "cv_nk_white_smr",
+                    "color": "БЕЛЫЙ",
+                    "trademark": "ErLine",
+                }
+            ],
+            source="gtin_excel",
+        )
+        session.commit()
+
+    with Session(engine) as session:
+        mapped_card = service.apply_latest(session, "user-1", _product_card(gender="мальчики"))
+
+    row = mapped_card.rows[0]
+    assert row.tnved == "6112120000"
+    assert row.country == "KG"
+    assert row.composition == "polyester 100%"
+    assert row.target_gender == "МУЖСКОЙ"
+
+
 def test_partial_update_preserves_previous_size_rows() -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
@@ -145,7 +183,7 @@ def test_partial_update_preserves_previous_size_rows() -> None:
     assert rows["40"].product_type == "КОСТЮМ СПОРТИВНЫЙ ОБНОВЛЕННЫЙ"
 
 
-def _product_card(with_template_values: bool = False) -> ProductCardTemplate:
+def _product_card(with_template_values: bool = False, gender: str = "boys") -> ProductCardTemplate:
     values = {
         "teksher_size": "38 МЕЖДУНАРОДНЫЙ",
         "product_type": "КОСТЮМ СПОРТИВНЫЙ",
@@ -171,7 +209,7 @@ def _product_card(with_template_values: bool = False) -> ProductCardTemplate:
             seller_article="cv_nk_white_smr",
             color="white",
             composition="polyester 100%",
-            gender="boys",
+            gender=gender,
             brand="ErLine",
         ),
         rows=[

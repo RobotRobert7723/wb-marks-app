@@ -92,7 +92,11 @@
   data-wb-article="{{ product_card.wb_article }}"
   data-seller-article="{{ product_card.wb_summary.seller_article }}"
   data-wb-product-type="{{ product_card.wb_summary.seller_category }}"
+  data-wb-tnved="{{ product_card.wb_summary.tnved }}"
+  data-wb-country="{{ product_card.wb_summary.country }}"
   data-wb-color="{{ product_card.wb_summary.color }}"
+  data-wb-composition="{{ product_card.wb_summary.composition }}"
+  data-wb-gender="{{ product_card.wb_summary.gender }}"
   data-wb-brand="{{ product_card.wb_summary.brand }}"
   data-has-mapping="{{ 'true' if product_card.has_teksher_mapping else 'false' }}"
   data-mapping-version="{{ product_card.mapping_version }}"
@@ -124,6 +128,11 @@
           <span>Для этой карточки уже есть GTIN. Действительно хотите обновить</span>
           <button type="button" id="gtin-update-yes">Да</button>
           <button type="button" id="gtin-update-no" class="secondary">Нет</button>
+        </div>
+        <div id="mapping-save-confirm" class="upload-confirm" hidden>
+          <span>В таблице есть красные поля. Сохранить?</span>
+          <button type="button" id="mapping-save-yes">Да</button>
+          <button type="button" id="mapping-save-no" class="secondary">Нет</button>
         </div>
         <div id="gtin-upload-status" class="upload-status" role="status" aria-live="polite"></div>
       </div>
@@ -328,6 +337,9 @@
   const confirmBox = document.getElementById('gtin-update-confirm');
   const confirmYes = document.getElementById('gtin-update-yes');
   const confirmNo = document.getElementById('gtin-update-no');
+  const saveConfirmBox = document.getElementById('mapping-save-confirm');
+  const saveConfirmYes = document.getElementById('mapping-save-yes');
+  const saveConfirmNo = document.getElementById('mapping-save-no');
   if (!page || !uploadButton || !input || !saveButton || !status) return;
 
   let hasUnsavedGtin = false;
@@ -348,7 +360,13 @@
   if (confirmNo) {
     confirmNo.addEventListener('click', () => hideUpdateConfirm());
   }
-  saveButton.addEventListener('click', () => saveMapping());
+  if (saveConfirmYes) {
+    saveConfirmYes.addEventListener('click', () => saveMapping());
+  }
+  if (saveConfirmNo) {
+    saveConfirmNo.addEventListener('click', () => hideSaveConfirm());
+  }
+  saveButton.addEventListener('click', () => requestSaveMapping());
 
   input.addEventListener('change', async () => {
     const file = input.files && input.files[0];
@@ -380,9 +398,20 @@
     }
   });
 
+  function requestSaveMapping() {
+    if (!hasUnsavedGtin) return;
+    hideUpdateConfirm();
+    if (document.querySelector('.gtin-mismatch')) {
+      showSaveConfirm();
+      return;
+    }
+    saveMapping();
+  }
+
   async function saveMapping() {
     if (!hasUnsavedGtin) return;
     hideUpdateConfirm();
+    hideSaveConfirm();
     setStatus('Сохраняем мэппинг...', '');
     saveButton.disabled = true;
     uploadButton.disabled = true;
@@ -421,11 +450,25 @@
       return;
     }
     confirmBox.hidden = false;
+    hideSaveConfirm();
     setStatus('', '');
   }
 
   function hideUpdateConfirm() {
     if (confirmBox) confirmBox.hidden = true;
+  }
+
+  function showSaveConfirm() {
+    if (!saveConfirmBox) {
+      saveMapping();
+      return;
+    }
+    saveConfirmBox.hidden = false;
+    setStatus('', '');
+  }
+
+  function hideSaveConfirm() {
+    if (saveConfirmBox) saveConfirmBox.hidden = true;
   }
 
   function setUnsaved(value) {
@@ -454,14 +497,24 @@
       color: page.dataset.wbColor || '',
       trademark: page.dataset.wbBrand || '',
     };
+    const wbDefaults = {
+      tnved: page.dataset.wbTnved || '',
+      country: page.dataset.wbCountry || '',
+      composition: page.dataset.wbComposition || '',
+      target_gender: targetGenderFromWb(page.dataset.wbGender || ''),
+    };
     document.querySelectorAll('tr[data-wb-size]').forEach((tr) => {
       const row = bySize.get(normalize(tr.dataset.wbSize || ''));
       if (!row) return;
       setLoadedCell(tr, 'teksher_size', row.size ? `${row.size} МЕЖДУНАРОДНЫЙ` : '');
       setLoadedCell(tr, 'product_type', (row.functional_name || '').toUpperCase(), row.functional_name || '', wbCompare.product_type);
       setLoadedCell(tr, 'gtin', row.gtin || '');
+      setLoadedCell(tr, 'tnved', wbDefaults.tnved);
+      setLoadedCell(tr, 'country', wbDefaults.country);
       setLoadedCell(tr, 'vendor_article', row.vendor_article || '');
       setLoadedCell(tr, 'color', (row.color || '').toUpperCase(), row.color || '', wbCompare.color);
+      setLoadedCell(tr, 'composition', wbDefaults.composition);
+      setLoadedCell(tr, 'target_gender', wbDefaults.target_gender);
       setLoadedCell(tr, 'trademark', row.brand || '', row.brand || '', wbCompare.trademark);
     });
   }
@@ -513,6 +566,18 @@
       .replace(/\s+/g, ' ')
       .trim()
       .toLowerCase();
+  }
+
+  function targetGenderFromWb(value) {
+    const map = {
+      'мальчики': 'МУЖСКОЙ',
+      'девочки': 'ЖЕНСКИЙ',
+      'мужской': 'МУЖСКОЙ',
+      'женский': 'ЖЕНСКИЙ',
+      'детский': 'УНИВЕРСАЛЬНЫЙ (УНИСЕКС)',
+    };
+    const normalized = normalizeComparable(value);
+    return map[normalized] || String(value || '').trim();
   }
 })();
 </script>

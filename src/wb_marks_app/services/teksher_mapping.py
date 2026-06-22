@@ -22,6 +22,14 @@ TEKSHER_FIELDS = (
     "trademark",
 )
 
+TARGET_GENDER_MAP = {
+    "мальчики": "МУЖСКОЙ",
+    "девочки": "ЖЕНСКИЙ",
+    "мужской": "МУЖСКОЙ",
+    "женский": "ЖЕНСКИЙ",
+    "детский": "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)",
+}
+
 
 class TeksherMappingService:
     def apply_latest(self, session: Session, user_id: str, product_card: ProductCardTemplate) -> ProductCardTemplate:
@@ -175,12 +183,12 @@ class TeksherMappingService:
             teksher_size=self._text(payload.get("teksher_size")),
             product_type=self._text(payload.get("product_type")),
             gtin=self._text(payload.get("gtin")),
-            tnved=self._text(payload.get("tnved")),
-            country=self._text(payload.get("country")),
+            tnved=self._text(payload.get("tnved")) or summary.tnved,
+            country=self._text(payload.get("country")) or summary.country,
             vendor_article=self._text(payload.get("vendor_article")),
             color=self._text(payload.get("color")),
-            composition=self._text(payload.get("composition")),
-            target_gender=self._text(payload.get("target_gender")),
+            composition=self._text(payload.get("composition")) or summary.composition,
+            target_gender=self._text(payload.get("target_gender")) or self._target_gender_from_wb(summary.gender),
             trademark=self._text(payload.get("trademark")),
         )
 
@@ -233,6 +241,10 @@ class TeksherMappingService:
 
     def _normalize(self, value: str) -> str:
         return self._text(value).casefold()
+
+    def _target_gender_from_wb(self, value: str) -> str:
+        text = self._text(value)
+        return TARGET_GENDER_MAP.get(text.casefold(), text)
 
     def _text(self, value) -> str:
         return str(value or "").strip()
