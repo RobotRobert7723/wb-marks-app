@@ -404,12 +404,16 @@ def create_app() -> FastAPI:
 
     @app.get("/product-cards/{wb_article}", response_class=HTMLResponse)
     def product_card_page(request: Request, wb_article: str):
-        if not _user_id_from_session(request):
+        user_id = _user_id_from_session(request)
+        if not user_id:
             return RedirectResponse(url="/login", status_code=303)
+        with session_scope() as session:
+            settings = get_or_create_settings(session, user_id)
+            config = settings_to_app_config(settings)
         return templates.TemplateResponse(
             request,
             "product_card.html",
-            _base_context(request, product_card=product_card_service.build_template(wb_article)),
+            _base_context(request, product_card=product_card_service.build_template(wb_article, config)),
         )
 
     @app.post("/labels/preview", response_class=HTMLResponse)

@@ -24,6 +24,7 @@ class AppConfig:
     pause_on_manual_step: bool = True
     step_timeout_seconds: int = 300
     wb_api_base_url: str = ""
+    wb_content_api_base_url: str = "https://content-api.wildberries.ru"
     wb_api_token: str = ""
     wb_draft_source_file: str = ""
     wb_seller_url: str = "https://seller.wildberries.ru/"

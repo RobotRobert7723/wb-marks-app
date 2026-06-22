@@ -52,6 +52,8 @@ def _config_from_env() -> AppConfig:
         artifact_storage_dir=os.getenv("ARTIFACT_STORAGE_DIR", ""),
         output_dir=os.getenv("OUTPUT_DIR", ""),
         wb_api_base_url=os.getenv("WB_API_BASE_URL", "").strip(),
+        wb_content_api_base_url=os.getenv("WB_CONTENT_API_BASE_URL", "https://content-api.wildberries.ru").strip()
+        or "https://content-api.wildberries.ru",
         wb_api_token=os.getenv("WB_API_TOKEN", "").strip(),
         teksher_url=os.getenv("TEKSHER_URL", "https://label.teksher.kg/").strip() or "https://label.teksher.kg/",
         teksher_api_token=os.getenv("TEKSHER_API_TOKEN", "").strip(),
