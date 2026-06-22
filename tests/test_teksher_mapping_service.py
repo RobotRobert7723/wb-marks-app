@@ -67,6 +67,66 @@ def test_save_version_and_apply_latest_mapping() -> None:
     assert mapped_card.rows[0].color == "БЕЛЫЙ"
 
 
+def test_apply_latest_uses_teksher_data_when_provided() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    service = TeksherMappingService()
+    product_card = _product_card()
+
+    with Session(engine) as session:
+        service.save_version(
+            session,
+            "user-1",
+            product_card,
+            [
+                {
+                    "wb_barcode": "2049271462689",
+                    "wb_size": "38",
+                    "wb_ru_size": "134",
+                    "teksher_size": "STALE SIZE",
+                    "product_type": "STALE PRODUCT",
+                    "gtin": "04709055620626",
+                    "tnved": "STALE TNVED",
+                    "country": "STALE COUNTRY",
+                    "vendor_article": "STALE ARTICLE",
+                    "color": "STALE COLOR",
+                    "composition": "STALE COMPOSITION",
+                    "target_gender": "STALE GENDER",
+                    "trademark": "STALE BRAND",
+                }
+            ],
+            source="gtin_excel",
+        )
+        session.commit()
+
+    with Session(engine) as session:
+        mapped_card = service.apply_latest(
+            session,
+            "user-1",
+            _product_card(),
+            {
+                "04709055620626": {
+                    "teksher_size": "38 МЕЖДУНАРОДНЫЙ",
+                    "product_type": "ДАННЫЕ ИЗ ТЕКШЕР",
+                    "gtin": "04709055620626",
+                    "tnved": "6112120000",
+                    "country": "Кыргызстан",
+                    "vendor_article": "cv_nk_white_smr",
+                    "color": "БЕЛЫЙ",
+                    "composition": "полиэстер 100%",
+                    "target_gender": "МУЖСКОЙ",
+                    "trademark": "ErLine",
+                }
+            },
+        )
+
+    assert mapped_card.has_teksher_mapping is True
+    assert mapped_card.rows[0].gtin == "04709055620626"
+    assert mapped_card.rows[0].product_type == "ДАННЫЕ ИЗ ТЕКШЕР"
+    assert mapped_card.rows[0].color == "БЕЛЫЙ"
+    assert mapped_card.rows[0].tnved == "6112120000"
+
+
 def test_save_version_fills_missing_values_from_wb() -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)

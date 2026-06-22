@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -418,7 +419,26 @@ def create_app() -> FastAPI:
             config = settings_to_app_config(settings)
         product_card = product_card_service.build_template(wb_article, config)
         with session_scope() as session:
-            product_card = teksher_mapping_service.apply_latest(session, user_id, product_card)
+            mapping_version, mapping_rows = teksher_mapping_service.latest_payload(session, user_id, product_card.wb_article)
+        teksher_rows_by_gtin: dict[str, dict] | None = None
+        teksher_status = ""
+        if mapping_rows:
+            try:
+                teksher_rows_by_gtin = teksher_product_service.product_mapping_rows_by_gtins(
+                    [row.get("gtin", "") for row in mapping_rows],
+                    config,
+                )
+            except (AppError, ManualStepRequired) as exc:
+                teksher_rows_by_gtin = {}
+                teksher_status = f" Данные Текшер по GTIN не загружены: {exc}"
+        product_card = teksher_mapping_service.apply_payload(
+            product_card,
+            mapping_rows,
+            mapping_version,
+            teksher_rows_by_gtin,
+        )
+        if teksher_status:
+            product_card = replace(product_card, api_status=(product_card.api_status + teksher_status).strip())
         return templates.TemplateResponse(
             request,
             "product_card.html",

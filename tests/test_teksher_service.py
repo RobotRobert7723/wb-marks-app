@@ -192,6 +192,28 @@ class FakeSessionProducts(FakeSession):
                     },
                 )
             return FakeResponse(200, json_data={"data": []})
+        if url.endswith("/facade/api/v1/products/product-1"):
+            return FakeResponse(
+                200,
+                json_data={
+                    "data": {
+                        "id": "product-1",
+                        "gtin": "04709055620626",
+                        "fullName": "Костюм спортивный",
+                        "trademark": "ErLine",
+                        "tnved": {"id": 999, "code": "6112120000"},
+                        "manufacturedCountry": {"id": 199, "name": "Кыргызстан"},
+                        "attributes": [
+                            {"attributeTypeCode": "35", "name": "Размер одежды / изделия", "value": "38 МЕЖДУНАРОДНЫЙ"},
+                            {"attributeTypeCode": "12", "name": "Вид товара", "value": "КОСТЮМ СПОРТИВНЫЙ"},
+                            {"attributeTypeCode": "36", "name": "Цвет", "value": "БЕЛЫЙ"},
+                            {"attributeTypeCode": "2483", "name": "Состав", "value": "полиэстер 100%"},
+                            {"attributeTypeCode": "14013", "name": "Целевой пол", "value": "МУЖСКОЙ"},
+                            {"attributeTypeCode": "13914", "name": "Модель / артикул производителя", "value": "cv_nk_white_smr"},
+                        ],
+                    }
+                },
+            )
         if url.endswith("/facade/api/v1/participants/manufacturer_info"):
             return FakeResponse(
                 200,
@@ -515,6 +537,25 @@ class TeksherServiceTests(unittest.TestCase):
         self.assertEqual(999, payload["tnved"])
         self.assertEqual("ErLine", payload["trademark"])
         self.assertFalse(any(call[0] == "POST" and call[1].endswith("/approve") for call in session.calls))
+
+    def test_product_mapping_rows_by_gtins_reads_teksher_product_details(self) -> None:
+        session = FakeSessionProducts(existing=True)
+        service = TeksherService(browser=FakeBrowser(), session=session, sleep=lambda _: None)
+        config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
+
+        rows = service.product_mapping_rows_by_gtins(["04709055620626"], config)
+
+        row = rows["04709055620626"]
+        self.assertEqual("38 МЕЖДУНАРОДНЫЙ", row["teksher_size"])
+        self.assertEqual("КОСТЮМ СПОРТИВНЫЙ", row["product_type"])
+        self.assertEqual("6112120000", row["tnved"])
+        self.assertEqual("Кыргызстан", row["country"])
+        self.assertEqual("cv_nk_white_smr", row["vendor_article"])
+        self.assertEqual("БЕЛЫЙ", row["color"])
+        self.assertEqual("полиэстер 100%", row["composition"])
+        self.assertEqual("МУЖСКОЙ", row["target_gender"])
+        self.assertEqual("ErLine", row["trademark"])
+        self.assertTrue(any(call[0] == "GET" and call[1].endswith("/facade/api/v1/products/product-1") for call in session.calls))
 
 
 if __name__ == "__main__":

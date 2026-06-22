@@ -141,6 +141,19 @@ class TeksherService:
         self.ensure_authenticated(config)
         return self._product_exists_by_gtin(gtin, config)
 
+    def product_mapping_rows_by_gtins(self, gtins: list[str], config: AppConfig) -> dict[str, dict]:
+        self.ensure_authenticated(config)
+        result: dict[str, dict] = {}
+        for gtin in self._unique_values(gtins):
+            product = self._product_by_gtin(gtin, config)
+            if product is None:
+                continue
+            row = self._product_mapping_row(product, config)
+            row_gtin = self._text(row.get("gtin")) or gtin
+            row["gtin"] = row_gtin
+            result[row_gtin] = row
+        return result
+
     def create_mark_code_order(self, gtin: str, quantity: int, config: AppConfig) -> str:
         self.ensure_authenticated(config)
         payload = self._create_mark_code_orders({gtin: [object()] * quantity}, config)
@@ -249,6 +262,17 @@ class TeksherService:
             rows.append(row)
         return rows
 
+    def _unique_values(self, values: list[str]) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            text = self._text(value)
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            result.append(text)
+        return result
+
     def _product_exists_by_gtin(self, gtin: str, config: AppConfig) -> bool:
         normalized_gtin = self._text(gtin)
         if not normalized_gtin:
@@ -265,6 +289,230 @@ class TeksherService:
                 if self._text(record.get(key)) == normalized_gtin:
                     return True
         return False
+
+    def _product_by_gtin(self, gtin: str, config: AppConfig) -> dict | None:
+        normalized_gtin = self._text(gtin)
+        if not normalized_gtin:
+            return None
+        response = self.session.get(
+            self._url(config, f"/facade/api/v1/products?gtin={quote(normalized_gtin)}"),
+            headers=self._headers(config),
+            timeout=30,
+        )
+        self._raise_for_status(response)
+        payload = self._json(response)
+        product = None
+        for record in self._extract_product_records(payload):
+            if self._text(
+                record.get("gtin") or record.get("GTIN") or record.get("gtinCode") or record.get("productGtin")
+            ) == normalized_gtin:
+                product = record
+                break
+        if product is None:
+            return None
+
+        product_id = self._product_id_from_response({"data": product})
+        if product_id:
+            try:
+                detail = self._product_detail(product_id, config)
+            except AppError:
+                detail = None
+            if detail is not None:
+                if not self._text(detail.get("gtin")):
+                    detail["gtin"] = normalized_gtin
+                return detail
+        return product
+
+    def _product_detail(self, product_id: str, config: AppConfig) -> dict | None:
+        response = self.session.get(
+            self._url(config, f"/facade/api/v1/products/{quote(product_id)}"),
+            headers=self._headers(config),
+            timeout=30,
+        )
+        self._raise_for_status(response)
+        return self._product_payload(self._json(response))
+
+    def _product_payload(self, payload: dict) -> dict | None:
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if isinstance(data, dict) and self._looks_like_product(data):
+            return data
+        if isinstance(payload, dict) and self._looks_like_product(payload):
+            return payload
+        for record in self._extract_product_records(payload):
+            return record
+        return None
+
+    def _product_mapping_row(self, product: dict, config: AppConfig) -> dict:
+        attributes = self._product_attributes(product, config)
+        return {
+            "teksher_size": self._attribute_value_by_spec(
+                attributes,
+                {"35"},
+                ("razmerodezhdy", "razmerizdeliya", "размеродежды", "размеризделия"),
+            ),
+            "product_type": self._attribute_value_by_spec(
+                attributes,
+                {"12"},
+                ("vidtovara", "видтовара"),
+            ),
+            "gtin": self._text(
+                product.get("gtin") or product.get("GTIN") or product.get("gtinCode") or product.get("productGtin")
+            ),
+            "tnved": self._nested_text(product, ("tnved", "tnvedCode"), ("code", "name", "title", "id")),
+            "country": self._nested_text(
+                product,
+                ("manufacturedCountry", "country", "manufacturedCountryId"),
+                ("name", "title", "code", "alpha2", "alpha3", "id"),
+            ),
+            "vendor_article": self._attribute_value_by_spec(
+                attributes,
+                {"13914"},
+                (
+                    "modelartikulproizvoditelya",
+                    "artikulproizvoditelya",
+                    "модельартикулпроизводителя",
+                    "артикулпроизводителя",
+                ),
+            ),
+            "color": self._attribute_value_by_spec(attributes, {"36"}, ("tsvet", "цвет")),
+            "composition": self._attribute_value_by_spec(attributes, {"2483"}, ("sostav", "состав")),
+            "target_gender": self._attribute_value_by_spec(
+                attributes,
+                {"14013"},
+                ("tselevoipol", "целевойпол"),
+            ),
+            "trademark": self._text(product.get("trademark") or product.get("brand")),
+        }
+
+    def _product_attributes(self, product: dict, config: AppConfig) -> list[dict]:
+        attributes = self._coerce_dict_list(
+            product.get("attributes")
+            or product.get("attributeValues")
+            or product.get("productAttributes")
+        )
+        if attributes:
+            return attributes
+        product_id = self._product_id_from_response({"data": product})
+        if not product_id:
+            return []
+        try:
+            response = self.session.get(
+                self._url(config, f"/facade/api/v1/products/{quote(product_id)}/attributes"),
+                headers=self._headers(config),
+                timeout=30,
+            )
+            self._raise_for_status(response)
+        except AppError:
+            return []
+        payload = self._json(response)
+        return self._coerce_dict_list(payload.get("data") if isinstance(payload, dict) else payload)
+
+    def _attribute_value_by_spec(
+        self,
+        attributes: list[dict],
+        codes: set[str],
+        name_tokens: tuple[str, ...],
+    ) -> str:
+        for attribute in attributes:
+            code = self._attribute_code(attribute)
+            if code in codes:
+                value = self._attribute_value(attribute)
+                if value:
+                    return value
+        normalized_tokens = {self._normalize_match(token) for token in name_tokens}
+        for attribute in attributes:
+            name = self._normalize_match(
+                self._first_record_text(
+                    attribute,
+                    "name",
+                    "attributeName",
+                    "attributeTypeName",
+                    "title",
+                    "label",
+                    "codeName",
+                )
+            )
+            if not name or not any(token in name for token in normalized_tokens):
+                continue
+            value = self._attribute_value(attribute)
+            if value:
+                return value
+        return ""
+
+    def _attribute_code(self, attribute: dict) -> str:
+        for key in ("attributeTypeCode", "attribute_type_code", "typeCode", "attributeCode", "code", "id"):
+            value = self._text(attribute.get(key))
+            if value:
+                return value
+        attribute_type = attribute.get("attributeType")
+        if isinstance(attribute_type, dict):
+            for key in ("code", "id"):
+                value = self._text(attribute_type.get(key))
+                if value:
+                    return value
+        return ""
+
+    def _attribute_value(self, attribute: dict) -> str:
+        for key in (
+            "value",
+            "values",
+            "attributeValue",
+            "attributeValues",
+            "optionValue",
+            "valueText",
+            "text",
+            "dictionaryValue",
+            "dictionaryValues",
+        ):
+            value = self._text(attribute.get(key))
+            if value:
+                return value
+        return ""
+
+    def _nested_text(self, product: dict, keys: tuple[str, ...], nested_keys: tuple[str, ...]) -> str:
+        for key in keys:
+            value = product.get(key)
+            if isinstance(value, dict):
+                for nested_key in nested_keys:
+                    text = self._text(value.get(nested_key))
+                    if text:
+                        return text
+            else:
+                text = self._text(value)
+                if text:
+                    return text
+        return ""
+
+    def _extract_product_records(self, payload) -> list[dict]:
+        return [record for record in self._extract_records(payload) if self._looks_like_product(record)]
+
+    def _looks_like_product(self, record: dict) -> bool:
+        return any(
+            key in record
+            for key in (
+                "gtin",
+                "GTIN",
+                "gtinCode",
+                "productGtin",
+                "fullName",
+                "status",
+                "attributes",
+                "attributeValues",
+                "trademark",
+                "manufacturedCountry",
+                "tnved",
+            )
+        )
+
+    def _coerce_dict_list(self, value) -> list[dict]:
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            records = self._extract_records(value)
+            if records:
+                return records
+            return [value]
+        return []
 
     def _create_product_draft(self, payload: dict, config: AppConfig) -> str:
         response = self.session.post(

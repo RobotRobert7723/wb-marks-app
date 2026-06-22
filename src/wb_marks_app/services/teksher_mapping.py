@@ -32,19 +32,46 @@ TARGET_GENDER_MAP = {
 
 
 class TeksherMappingService:
-    def apply_latest(self, session: Session, user_id: str, product_card: ProductCardTemplate) -> ProductCardTemplate:
-        version = self.latest_version(session, user_id, product_card.wb_article)
+    def apply_latest(
+        self,
+        session: Session,
+        user_id: str,
+        product_card: ProductCardTemplate,
+        teksher_rows_by_gtin: dict[str, dict] | None = None,
+    ) -> ProductCardTemplate:
+        version, saved_rows = self.latest_payload(session, user_id, product_card.wb_article)
+        return self.apply_payload(product_card, saved_rows, version, teksher_rows_by_gtin)
+
+    def latest_payload(
+        self,
+        session: Session,
+        user_id: str,
+        wb_article: str,
+    ) -> tuple[int, list[dict]]:
+        version = self.latest_version(session, user_id, wb_article)
         if version == 0:
-            return replace(product_card, rows=[self._clear_teksher_fields(row) for row in product_card.rows])
+            return 0, []
 
         saved_rows = session.execute(
             select(TeksherMappingModel)
             .where(TeksherMappingModel.user_id == user_id)
-            .where(TeksherMappingModel.wb_article == product_card.wb_article)
+            .where(TeksherMappingModel.wb_article == wb_article)
             .where(TeksherMappingModel.version == version)
         ).scalars().all()
-        by_key = {self._row_key(row.wb_barcode, row.wb_size): row for row in saved_rows}
-        by_size = {self._normalize(row.wb_size): row for row in saved_rows if row.wb_size}
+        return version, [self._payload_from_saved(row) for row in saved_rows]
+
+    def apply_payload(
+        self,
+        product_card: ProductCardTemplate,
+        saved_rows: list[dict],
+        version: int,
+        teksher_rows_by_gtin: dict[str, dict] | None = None,
+    ) -> ProductCardTemplate:
+        if version == 0 or not saved_rows:
+            return replace(product_card, rows=[self._clear_teksher_fields(row) for row in product_card.rows])
+
+        by_key = {self._row_key(row["wb_barcode"], row["wb_size"]): row for row in saved_rows}
+        by_size = {self._normalize(row["wb_size"]): row for row in saved_rows if row.get("wb_size")}
 
         rows: list[ProductCardMappingRow] = []
         for wb_row in product_card.rows:
@@ -52,19 +79,20 @@ class TeksherMappingService:
             if saved is None:
                 rows.append(self._clear_teksher_fields(wb_row))
                 continue
+            fields = self._row_fields(saved, teksher_rows_by_gtin)
             rows.append(
                 replace(
                     wb_row,
-                    teksher_size=saved.teksher_size,
-                    product_type=saved.product_type,
-                    gtin=saved.gtin,
-                    tnved=saved.tnved,
-                    country=saved.country,
-                    vendor_article=saved.vendor_article,
-                    color=saved.color,
-                    composition=saved.composition,
-                    target_gender=saved.target_gender,
-                    trademark=saved.trademark,
+                    teksher_size=fields["teksher_size"],
+                    product_type=fields["product_type"],
+                    gtin=fields["gtin"],
+                    tnved=fields["tnved"],
+                    country=fields["country"],
+                    vendor_article=fields["vendor_article"],
+                    color=fields["color"],
+                    composition=fields["composition"],
+                    target_gender=fields["target_gender"],
+                    trademark=fields["trademark"],
                 )
             )
 
@@ -217,6 +245,34 @@ class TeksherMappingService:
             "trademark": saved.trademark,
         }
         return self._model_from_payload(user_id, product_card, wb_row, payload, version, source)
+
+    def _payload_from_saved(self, saved: TeksherMappingModel) -> dict:
+        return {
+            "wb_barcode": saved.wb_barcode,
+            "wb_size": saved.wb_size,
+            "wb_ru_size": saved.wb_ru_size,
+            "teksher_size": saved.teksher_size,
+            "product_type": saved.product_type,
+            "gtin": saved.gtin,
+            "tnved": saved.tnved,
+            "country": saved.country,
+            "vendor_article": saved.vendor_article,
+            "color": saved.color,
+            "composition": saved.composition,
+            "target_gender": saved.target_gender,
+            "trademark": saved.trademark,
+        }
+
+    def _row_fields(self, saved: dict, teksher_rows_by_gtin: dict[str, dict] | None) -> dict[str, str]:
+        saved_gtin = self._text(saved.get("gtin"))
+        if teksher_rows_by_gtin is None:
+            source = saved
+        else:
+            source = teksher_rows_by_gtin.get(saved_gtin, {})
+
+        fields = {field: self._text(source.get(field)) for field in TEKSHER_FIELDS}
+        fields["gtin"] = fields["gtin"] or saved_gtin
+        return fields
 
     def _has_teksher_values(self, payload: dict) -> bool:
         return any(self._text(payload.get(field)) for field in TEKSHER_FIELDS)
