@@ -234,10 +234,8 @@ class FakeSessionProducts(FakeSession):
             return FakeResponse(
                 200,
                 json_data={
-                    "data": {
-                        "manufacturerFullName": "ОсОО ЭрЛайн",
-                        "manufacturerInn": "12345678901234",
-                    }
+                    "fullName": "ОсОО ЭрЛайн",
+                    "inn": "12345678901234",
                 },
             )
         if "/facade/api/v1/tnveds" in url:

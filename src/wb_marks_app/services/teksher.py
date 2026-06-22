@@ -651,7 +651,7 @@ class TeksherService:
         )
         self._raise_for_status(response)
         payload = self._json_or_empty(response)
-        data = payload.get("data") if isinstance(payload, dict) else payload
+        data = self._payload_data(payload)
         manufacturer = self._manufacturer_fields_from_payload(data)
         if not manufacturer["manufacturerFullName"] or not manufacturer["manufacturerInn"]:
             fallback = self._current_user_participant_fields(config)
@@ -701,10 +701,15 @@ class TeksherService:
         )
         self._raise_for_status(response)
         payload = self._json_or_empty(response)
-        data = payload.get("data") if isinstance(payload, dict) else payload
+        data = self._payload_data(payload)
         if isinstance(data, dict) and isinstance(data.get("participant"), dict):
             return self._manufacturer_fields_from_payload(data["participant"])
         return self._manufacturer_fields_from_payload(data)
+
+    def _payload_data(self, payload):
+        if isinstance(payload, dict) and "data" in payload:
+            return payload.get("data")
+        return payload
 
     def _manufacturer_fields_for_gtin(self, manufacturer_info: dict[str, str], gtin: str) -> dict[str, str]:
         manufacturer = dict(manufacturer_info)
