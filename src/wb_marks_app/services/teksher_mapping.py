@@ -27,7 +27,7 @@ class TeksherMappingService:
     def apply_latest(self, session: Session, user_id: str, product_card: ProductCardTemplate) -> ProductCardTemplate:
         version = self.latest_version(session, user_id, product_card.wb_article)
         if version == 0:
-            return product_card
+            return replace(product_card, rows=[self._clear_teksher_fields(row) for row in product_card.rows])
 
         saved_rows = session.execute(
             select(TeksherMappingModel)
@@ -42,7 +42,7 @@ class TeksherMappingService:
         for wb_row in product_card.rows:
             saved = by_key.get(self._row_key(wb_row.barcode, wb_row.wb_size)) or by_size.get(self._normalize(wb_row.wb_size))
             if saved is None:
-                rows.append(wb_row)
+                rows.append(self._clear_teksher_fields(wb_row))
                 continue
             rows.append(
                 replace(
@@ -138,6 +138,21 @@ class TeksherMappingService:
 
     def _has_teksher_values(self, payload: dict) -> bool:
         return any(self._text(payload.get(field)) for field in TEKSHER_FIELDS)
+
+    def _clear_teksher_fields(self, row: ProductCardMappingRow) -> ProductCardMappingRow:
+        return replace(
+            row,
+            teksher_size="",
+            product_type="",
+            gtin="",
+            tnved="",
+            country="",
+            vendor_article="",
+            color="",
+            composition="",
+            target_gender="",
+            trademark="",
+        )
 
     def _row_key(self, barcode: str, size: str) -> str:
         return f"{self._normalize(barcode)}::{self._normalize(size)}"
