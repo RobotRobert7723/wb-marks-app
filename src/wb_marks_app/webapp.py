@@ -13,6 +13,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from wb_marks_app.config import load_config
 from wb_marks_app.db import create_all, session_scope
+from wb_marks_app.exceptions import AppError, ManualStepRequired
 from wb_marks_app.mailer import send_password_reset_email, smtp_configured
 from wb_marks_app.server_auth import (
     authenticate_user,
@@ -41,7 +42,7 @@ from wb_marks_app.services.gtin_excel import GtinExcelParser
 from wb_marks_app.services.labels import build_manual_labels, labels_to_dicts, make_label_record
 from wb_marks_app.services.product_cards import ProductCardTemplateService
 from wb_marks_app.services.server_workflow import LaunchRequest, WorkflowRunService
-from wb_marks_app.services.teksher import TeksherService
+from wb_marks_app.services.teksher import ExistingTeksherProductError, TeksherService
 from wb_marks_app.services.teksher_mapping import TeksherMappingService
 from wb_marks_app.services.wb import WBService
 
@@ -51,6 +52,7 @@ workflow_service = WorkflowRunService()
 product_card_service = ProductCardTemplateService()
 gtin_excel_parser = GtinExcelParser()
 teksher_mapping_service = TeksherMappingService()
+teksher_product_service = TeksherService(BrowserSessionManager(Path.cwd() / ".teksher-product-cards"))
 
 
 def _raw_settings_dict(settings: AppSettingsModel) -> dict[str, str]:
@@ -479,6 +481,7 @@ def create_app() -> FastAPI:
                 settings = get_or_create_settings(session, user_id)
                 config = settings_to_app_config(settings)
             product_card = product_card_service.build_template(wb_article, config)
+            draft_ids = teksher_product_service.ensure_product_drafts_for_mapping(product_card, rows, config)
             with session_scope() as session:
                 version, created = teksher_mapping_service.save_version(
                     session,
@@ -489,12 +492,17 @@ def create_app() -> FastAPI:
                 )
         except ValueError as exc:
             return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+        except ExistingTeksherProductError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=409)
+        except (AppError, ManualStepRequired) as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
 
         return {
             "ok": True,
             "message": f"Мэппинг сохранен: версия {version}, строк {created}.",
             "version": version,
             "rows_saved": created,
+            "teksher_draft_ids": draft_ids,
         }
 
     @app.post("/labels/preview", response_class=HTMLResponse)

@@ -7,7 +7,12 @@ from datetime import datetime
 import unittest
 
 from wb_marks_app.models import AppConfig, MarkingTask
-from wb_marks_app.services.teksher import TeksherService
+from wb_marks_app.services.product_cards import ProductCardMappingRow, ProductCardTemplate, WbProductSummary
+from wb_marks_app.services.teksher import (
+    ExistingTeksherProductError,
+    TEKSHER_EXISTING_PRODUCT_MESSAGE,
+    TeksherService,
+)
 from wb_marks_app.teksher_api_cli import run_full_flow
 
 
@@ -163,6 +168,56 @@ class FakeSessionOrderReadyFalse(FakeSession):
             return FakeResponse(200, json_data={"status": "200", "data": False})
         return super().get(url, headers=headers, timeout=timeout)
 
+
+class FakeSessionProducts(FakeSession):
+    def __init__(self, existing: bool = False) -> None:
+        super().__init__()
+        self.existing = existing
+        self.created_payloads: list[dict] = []
+
+    def get(self, url, headers=None, timeout=None):
+        self.calls.append(("GET", url, None))
+        if "/facade/api/v1/products?gtin=" in url:
+            if self.existing:
+                return FakeResponse(
+                    200,
+                    json_data={
+                        "data": [
+                            {
+                                "id": "product-1",
+                                "gtin": "04709055620626",
+                                "status": "DRAFT",
+                            }
+                        ]
+                    },
+                )
+            return FakeResponse(200, json_data={"data": []})
+        if url.endswith("/facade/api/v1/participants/manufacturer_info"):
+            return FakeResponse(
+                200,
+                json_data={
+                    "data": {
+                        "manufacturerFullName": "ОсОО ЭрЛайн",
+                        "manufacturerInn": "12345678901234",
+                        "gcp": "470905562",
+                        "gln": "4709055620001",
+                    }
+                },
+            )
+        if url.endswith("/facade/api/v1/tnveds"):
+            return FakeResponse(200, json_data={"data": [{"id": 999, "code": "6112120000"}]})
+        if url.endswith("/facade/api/v1/countries"):
+            return FakeResponse(200, json_data={"data": [{"id": 199, "name": "Кыргызстан", "alpha2": "KG"}]})
+        return super().get(url, headers=headers, timeout=timeout)
+
+    def post(self, url, headers=None, json=None, files=None, timeout=None):
+        self.calls.append(("POST", url, json if json is not None else files))
+        if url.endswith("/facade/api/v1/products/create"):
+            self.created_payloads.append(json or {})
+            return FakeResponse(201, json_data={"data": {"id": "draft-1", "status": "DRAFT"}})
+        return super().post(url, headers=headers, json=json, files=files, timeout=timeout)
+
+
 def _future_token() -> str:
     header = {"alg": "none", "typ": "JWT"}
     payload = {"exp": int(time.time()) + 3600}
@@ -177,6 +232,47 @@ def _future_token() -> str:
 
 def _b64(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _product_card() -> ProductCardTemplate:
+    summary = WbProductSummary(
+        name="Спортивный костюм",
+        seller_category="Костюмы спортивные",
+        wb_article="847012873",
+        tnved="6112120000",
+        country="Кыргызстан",
+        seller_article="cv_nk_white_smr",
+        color="белый",
+        composition="полиэстер 100%",
+        gender="мальчики",
+        brand="ErLine",
+    )
+    return ProductCardTemplate(
+        wb_article="847012873",
+        image_url="",
+        api_status="",
+        wb_summary=summary,
+        rows=[
+            ProductCardMappingRow(
+                barcode="2049271462689",
+                wb_size="38",
+                ru_size="134",
+                teksher_size="",
+                product_type="",
+                gtin="",
+                tnved="",
+                country="",
+                vendor_article="",
+                color="",
+                composition="",
+                target_gender="",
+                trademark="",
+                ready_to_mark=0,
+                print_count=0,
+                order_count=0,
+            )
+        ],
+    )
 
 
 class TeksherServiceTests(unittest.TestCase):
@@ -368,6 +464,57 @@ class TeksherServiceTests(unittest.TestCase):
         config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
 
         service._wait_for_order_ready("order-op-1", config)
+
+    def test_ensure_product_drafts_for_mapping_raises_when_gtin_exists(self) -> None:
+        session = FakeSessionProducts(existing=True)
+        service = TeksherService(browser=FakeBrowser(), session=session, sleep=lambda _: None)
+        config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
+
+        with self.assertRaises(ExistingTeksherProductError) as raised:
+            service.ensure_product_drafts_for_mapping(
+                _product_card(),
+                [{"gtin": "04709055620626", "wb_size": "38"}],
+                config,
+            )
+
+        self.assertEqual(TEKSHER_EXISTING_PRODUCT_MESSAGE, str(raised.exception))
+        self.assertEqual([], session.created_payloads)
+
+    def test_ensure_product_drafts_for_mapping_creates_draft_without_approve(self) -> None:
+        session = FakeSessionProducts(existing=False)
+        service = TeksherService(browser=FakeBrowser(), session=session, sleep=lambda _: None)
+        config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
+
+        draft_ids = service.ensure_product_drafts_for_mapping(
+            _product_card(),
+            [
+                {
+                    "wb_size": "38",
+                    "teksher_size": "38 МЕЖДУНАРОДНЫЙ",
+                    "product_type": "КОСТЮМ СПОРТИВНЫЙ",
+                    "gtin": "04709055620626",
+                    "tnved": "6112120000",
+                    "country": "Кыргызстан",
+                    "color": "БЕЛЫЙ",
+                    "composition": "полиэстер 100%",
+                    "trademark": "ErLine",
+                }
+            ],
+            config,
+        )
+
+        self.assertEqual(["draft-1"], draft_ids)
+        self.assertEqual(1, len(session.created_payloads))
+        payload = session.created_payloads[0]
+        self.assertEqual("04709055620626", payload["gtin"])
+        self.assertEqual("ОсОО ЭрЛайн", payload["manufacturerFullName"])
+        self.assertEqual("12345678901234", payload["manufacturerInn"])
+        self.assertEqual("470905562", payload["gcp"])
+        self.assertEqual("4709055620001", payload["gln"])
+        self.assertEqual(199, payload["manufacturedCountryId"])
+        self.assertEqual(999, payload["tnved"])
+        self.assertEqual("ErLine", payload["trademark"])
+        self.assertFalse(any(call[0] == "POST" and call[1].endswith("/approve") for call in session.calls))
 
 
 if __name__ == "__main__":

@@ -477,7 +477,9 @@
   }
 
   function collectMappingRows() {
-    return Array.from(document.querySelectorAll('tr[data-wb-size]')).map((tr) => {
+    return Array.from(document.querySelectorAll('tr[data-wb-size]'))
+      .filter((tr) => tr.querySelector('[data-gtin-field].gtin-loaded'))
+      .map((tr) => {
       const row = {
         wb_barcode: tr.dataset.wbBarcode || '',
         wb_size: tr.dataset.wbSize || '',

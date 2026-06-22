@@ -7,6 +7,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
+from urllib.parse import quote
 
 try:
     import requests
@@ -38,6 +39,12 @@ from wb_marks_app.services.browser import BrowserSessionManager
 
 Logger = Callable[[str], None]
 
+TEKSHER_EXISTING_PRODUCT_MESSAGE = "В Текшер уже есть карточка с этим GTIN, данные НЕ СОХРАНЕНЫ"
+
+
+class ExistingTeksherProductError(AppError):
+    """Raised when Teksher already has a product card for a requested GTIN."""
+
 
 class TeksherService:
     def __init__(
@@ -51,6 +58,7 @@ class TeksherService:
         self.logger = logger or (lambda _: None)
         self.session = session or requests.Session()
         self.sleep = sleep or time.sleep
+        self._dictionary_cache: dict[str, list[dict]] = {}
 
     def issue_marks(self, tasks: list[MarkingTask], config: AppConfig) -> list[MarkingTask]:
         if not tasks:
@@ -100,6 +108,38 @@ class TeksherService:
 
     def validate_connection(self, config: AppConfig) -> None:
         self.ensure_authenticated(config)
+
+    def ensure_product_drafts_for_mapping(
+        self,
+        product_card,
+        rows_payload: list[dict],
+        config: AppConfig,
+    ) -> list[str]:
+        rows = self._unique_gtin_rows(rows_payload)
+        if not rows:
+            return []
+
+        self.ensure_authenticated(config)
+        for row in rows:
+            gtin = self._text(row.get("gtin"))
+            if self._product_exists_by_gtin(gtin, config):
+                raise ExistingTeksherProductError(TEKSHER_EXISTING_PRODUCT_MESSAGE)
+
+        manufacturer_info = self._manufacturer_create_fields(config)
+        draft_ids: list[str] = []
+        for row in rows:
+            payload = self._product_draft_payload(product_card, row, manufacturer_info, config)
+            try:
+                draft_ids.append(self._create_product_draft(payload, config))
+            except AppError as exc:
+                if self._is_existing_product_error(exc):
+                    raise ExistingTeksherProductError(TEKSHER_EXISTING_PRODUCT_MESSAGE) from exc
+                raise
+        return draft_ids
+
+    def product_exists_by_gtin(self, gtin: str, config: AppConfig) -> bool:
+        self.ensure_authenticated(config)
+        return self._product_exists_by_gtin(gtin, config)
 
     def create_mark_code_order(self, gtin: str, quantity: int, config: AppConfig) -> str:
         self.ensure_authenticated(config)
@@ -195,6 +235,334 @@ class TeksherService:
         for task in tasks:
             grouped[task.gtin].append(task)
         return grouped
+
+    def _unique_gtin_rows(self, rows_payload: list[dict]) -> list[dict]:
+        rows: list[dict] = []
+        seen: set[str] = set()
+        for row in rows_payload:
+            if not isinstance(row, dict):
+                continue
+            gtin = self._text(row.get("gtin"))
+            if not gtin or gtin in seen:
+                continue
+            seen.add(gtin)
+            rows.append(row)
+        return rows
+
+    def _product_exists_by_gtin(self, gtin: str, config: AppConfig) -> bool:
+        normalized_gtin = self._text(gtin)
+        if not normalized_gtin:
+            return False
+        response = self.session.get(
+            self._url(config, f"/facade/api/v1/products?gtin={quote(normalized_gtin)}"),
+            headers=self._headers(config),
+            timeout=30,
+        )
+        self._raise_for_status(response)
+        payload = self._json(response)
+        for record in self._extract_records(payload):
+            for key in ("gtin", "GTIN", "gtinCode", "productGtin"):
+                if self._text(record.get(key)) == normalized_gtin:
+                    return True
+        return False
+
+    def _create_product_draft(self, payload: dict, config: AppConfig) -> str:
+        response = self.session.post(
+            self._url(config, "/facade/api/v1/products/create"),
+            headers=self._headers(config),
+            json=payload,
+            timeout=30,
+        )
+        self._raise_for_status(response)
+        data = self._json(response)
+        draft_id = self._product_id_from_response(data)
+        if not draft_id:
+            self.logger(f"Teksher product draft create response did not include id: {data}")
+        return draft_id
+
+    def _product_draft_payload(
+        self,
+        product_card,
+        row: dict,
+        manufacturer_info: dict[str, str],
+        config: AppConfig,
+    ) -> dict:
+        tnved = self._text(row.get("tnved")) or self._text(product_card.wb_summary.tnved)
+        country = self._text(row.get("country")) or self._text(product_card.wb_summary.country)
+        payload = {
+            "gtin": self._text(row.get("gtin")),
+            "fullName": self._product_full_name(product_card, row),
+            "manufacturerFullName": manufacturer_info["manufacturerFullName"],
+            "manufacturerInn": manufacturer_info["manufacturerInn"],
+            "gcp": manufacturer_info["gcp"],
+            "gln": manufacturer_info["gln"],
+            "manufacturedCountryId": self._resolve_country_id(country, config),
+            "tnved": self._resolve_tnved_id(tnved, config),
+            "trademark": self._text(row.get("trademark")) or self._text(product_card.wb_summary.brand),
+            "isImport": False,
+        }
+        return payload
+
+    def _product_full_name(self, product_card, row: dict) -> str:
+        values = [
+            self._text(row.get("product_type")) or self._text(product_card.wb_summary.name),
+            self._text(row.get("teksher_size")) or self._text(row.get("wb_size")),
+            self._text(row.get("color")),
+            self._text(row.get("composition")) or self._text(product_card.wb_summary.composition),
+        ]
+        full_name = " ".join(value for value in values if value)
+        if full_name:
+            return full_name
+        return f"WB {self._text(product_card.wb_article)} {self._text(row.get('gtin'))}".strip()
+
+    def _manufacturer_create_fields(self, config: AppConfig) -> dict[str, str]:
+        response = self.session.get(
+            self._url(config, "/facade/api/v1/participants/manufacturer_info"),
+            headers=self._headers(config),
+            timeout=30,
+        )
+        self._raise_for_status(response)
+        payload = self._json(response)
+        data = payload.get("data") if isinstance(payload, dict) else payload
+        manufacturer = {
+            "manufacturerFullName": self._participant_value(
+                data,
+                "manufacturerFullName",
+                "fullName",
+                "full_name",
+                "name",
+                "participantName",
+                "organizationName",
+                "companyName",
+            ),
+            "manufacturerInn": self._participant_value(
+                data,
+                "manufacturerInn",
+                "inn",
+                "taxNumber",
+                "taxpayerId",
+                "tin",
+            ),
+            "gcp": self._participant_value(data, "gcp", "gs1CompanyPrefix", "companyPrefix")
+            or self._identifier_value(data, "gcp", "gs1companyprefix", "companyprefix"),
+            "gln": self._participant_value(data, "gln", "globalLocationNumber")
+            or self._identifier_value(data, "gln", "globallocationnumber"),
+        }
+        missing = [key for key, value in manufacturer.items() if not value]
+        if missing:
+            raise AppError(
+                "Не удалось получить реквизиты производителя Текшер для создания карточки: "
+                + ", ".join(missing)
+                + "."
+            )
+        return manufacturer
+
+    def _participant_value(self, payload, *keys: str) -> str:
+        for requested_key in keys:
+            normalized_key = self._key_token(requested_key)
+            for record in self._walk_dicts(payload):
+                for key, value in record.items():
+                    if self._key_token(str(key)) == normalized_key:
+                        text = self._text(value)
+                        if text:
+                            return text
+        return ""
+
+    def _identifier_value(self, payload, *identifier_names: str) -> str:
+        names = {self._normalize_match(name) for name in identifier_names}
+        for record in self._walk_dicts(payload):
+            label = self._first_record_text(
+                record,
+                "type",
+                "identifierType",
+                "identifierName",
+                "name",
+                "code",
+                "key",
+            )
+            if self._normalize_match(label) not in names:
+                continue
+            value = self._first_record_text(record, "value", "identifier", "number")
+            if value:
+                return value
+        return ""
+
+    def _resolve_tnved_id(self, value: str, config: AppConfig) -> int:
+        return self._dictionary_id(
+            value,
+            self._dictionary_items("/facade/api/v1/tnveds", config),
+            ("code", "tnved", "tnvedCode", "name", "title", "label", "value"),
+            "ТНВЭД",
+        )
+
+    def _resolve_country_id(self, value: str, config: AppConfig) -> int:
+        country = self._text(value)
+        try:
+            return self._dictionary_id(
+                country,
+                self._dictionary_items("/facade/api/v1/countries", config),
+                ("name", "nameRu", "shortName", "title", "label", "code", "alpha2", "alpha3", "countryCode"),
+                "страну производства",
+            )
+        except AppError:
+            if self._normalize_match(country) in {
+                "kg",
+                "kyrgyzstan",
+                "kyrgyzrepublic",
+                "кыргызстан",
+                "киргизия",
+                "киргизскаяреспублика",
+            }:
+                return config.teksher_country_id
+            raise
+
+    def _dictionary_items(self, path: str, config: AppConfig) -> list[dict]:
+        cache_key = f"{config.teksher_url.rstrip('/')}{path}"
+        if cache_key in self._dictionary_cache:
+            return self._dictionary_cache[cache_key]
+        response = self.session.get(
+            self._url(config, path),
+            headers=self._headers(config),
+            timeout=30,
+        )
+        self._raise_for_status(response)
+        payload = self._json(response)
+        items = list(self._extract_records(payload))
+        self._dictionary_cache[cache_key] = items
+        return items
+
+    def _dictionary_id(
+        self,
+        value: str,
+        items: list[dict],
+        value_keys: tuple[str, ...],
+        label: str,
+    ) -> int:
+        text = self._text(value)
+        if not text:
+            raise AppError(f"Не удалось определить {label}: значение пустое.")
+        text_norm = self._normalize_match(text)
+        text_digits = self._digits(text)
+        for item in items:
+            item_id = self._extract_dict_id(item)
+            if item_id is None:
+                continue
+            if self._text(item_id) == text:
+                return int(item_id)
+            for candidate in self._dictionary_value_texts(item, value_keys):
+                candidate_norm = self._normalize_match(candidate)
+                candidate_digits = self._digits(candidate)
+                if candidate_norm == text_norm or (text_digits and candidate_digits == text_digits):
+                    return int(item_id)
+        if text.isdigit() and len(text) <= 6:
+            return int(text)
+        raise AppError(f"Не удалось найти {label} в справочнике Текшер: {text}.")
+
+    def _dictionary_value_texts(self, item: dict, keys: tuple[str, ...]) -> list[str]:
+        normalized_keys = {self._key_token(key) for key in keys}
+        values: list[str] = []
+        for key, value in item.items():
+            if self._key_token(str(key)) in normalized_keys:
+                text = self._text(value)
+                if text:
+                    values.append(text)
+            if isinstance(value, dict):
+                values.extend(self._dictionary_value_texts(value, keys))
+        return values
+
+    def _extract_dict_id(self, item: dict) -> int | None:
+        for key in ("id", "ID", "valueId", "value_id"):
+            value = item.get(key)
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str) and value.strip().isdigit():
+                return int(value.strip())
+        return None
+
+    def _extract_records(self, payload) -> list[dict]:
+        if isinstance(payload, list):
+            records: list[dict] = []
+            for item in payload:
+                records.extend(self._extract_records(item))
+            return records
+        if not isinstance(payload, dict):
+            return []
+
+        records = []
+        if self._extract_dict_id(payload) is not None or any(key in payload for key in ("gtin", "GTIN", "gtinCode")):
+            records.append(payload)
+        for key in ("data", "content", "items", "list", "results", "records", "rows", "products", "product", "body"):
+            if key in payload:
+                records.extend(self._extract_records(payload[key]))
+        return records
+
+    def _walk_dicts(self, payload):
+        if isinstance(payload, dict):
+            yield payload
+            for value in payload.values():
+                yield from self._walk_dicts(value)
+        elif isinstance(payload, list):
+            for item in payload:
+                yield from self._walk_dicts(item)
+
+    def _first_record_text(self, record: dict, *keys: str) -> str:
+        normalized_keys = {self._key_token(key) for key in keys}
+        for key, value in record.items():
+            if self._key_token(str(key)) in normalized_keys:
+                text = self._text(value)
+                if text:
+                    return text
+        return ""
+
+    def _product_id_from_response(self, payload: dict) -> str:
+        data = payload.get("data") if isinstance(payload, dict) else payload
+        if isinstance(data, dict):
+            for key in ("id", "productId", "product_id"):
+                if self._text(data.get(key)):
+                    return self._text(data.get(key))
+        for key in ("id", "productId", "product_id"):
+            if isinstance(payload, dict) and self._text(payload.get(key)):
+                return self._text(payload.get(key))
+        if isinstance(data, (str, int)):
+            return str(data)
+        return ""
+
+    def _is_existing_product_error(self, exc: Exception) -> bool:
+        message = str(exc).casefold()
+        return "409" in message or "conflict" in message or "already" in message or "уже" in message
+
+    def _text(self, value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, (list, tuple, set)):
+            return ", ".join(self._text(item) for item in value if self._text(item))
+        if isinstance(value, dict):
+            for key in ("value", "name", "title", "label", "code"):
+                text = self._text(value.get(key))
+                if text:
+                    return text
+            return ""
+        return str(value).strip()
+
+    def _normalize_match(self, value: str) -> str:
+        return (
+            self._text(value)
+            .replace("ё", "е")
+            .replace("Ё", "Е")
+            .replace("_", "")
+            .replace("-", "")
+            .replace(".", "")
+            .replace(",", "")
+            .replace("/", "")
+            .replace(" ", "")
+            .casefold()
+        )
+
+    def _key_token(self, value: str) -> str:
+        return self._normalize_match(value)
+
+    def _digits(self, value: str) -> str:
+        return "".join(ch for ch in self._text(value) if ch.isdigit())
 
     def _create_mark_code_orders(
         self,
