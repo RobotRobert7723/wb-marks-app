@@ -436,7 +436,15 @@ def create_app() -> FastAPI:
             settings = get_or_create_settings(session, user_id)
             config = settings_to_app_config(settings)
         product_card = product_card_service.build_template(wb_article, config)
-        seller_article = product_card.wb_summary.seller_article
+        seller_article = product_card.wb_summary.seller_article.strip()
+        if not seller_article:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "message": product_card.api_status or "Артикул продавца WB не загружен.",
+                    "rows": [],
+                }
+            )
         matched_rows = gtin_excel_parser.find_by_vendor_article(gtin_rows, seller_article)
         if not matched_rows:
             return JSONResponse({"ok": False, "message": "Артикул продавца в файле не найден", "rows": []})
