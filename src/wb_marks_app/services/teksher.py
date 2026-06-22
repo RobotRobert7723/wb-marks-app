@@ -283,7 +283,9 @@ class TeksherService:
             timeout=30,
         )
         self._raise_for_status(response)
-        payload = self._json(response)
+        payload = self._json_or_empty(response)
+        if payload is None:
+            return False
         for record in self._extract_records(payload):
             for key in ("gtin", "GTIN", "gtinCode", "productGtin"):
                 if self._text(record.get(key)) == normalized_gtin:
@@ -300,7 +302,9 @@ class TeksherService:
             timeout=30,
         )
         self._raise_for_status(response)
-        payload = self._json(response)
+        payload = self._json_or_empty(response)
+        if payload is None:
+            return None
         product = None
         for record in self._extract_product_records(payload):
             if self._text(

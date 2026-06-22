@@ -174,15 +174,23 @@ class FakeSessionOrderReadyFalse(FakeSession):
 
 
 class FakeSessionProducts(FakeSession):
-    def __init__(self, existing: bool = False, empty_create_response: bool = False) -> None:
+    def __init__(
+        self,
+        existing: bool = False,
+        empty_create_response: bool = False,
+        no_content_lookup: bool = False,
+    ) -> None:
         super().__init__()
         self.existing = existing
         self.empty_create_response = empty_create_response
+        self.no_content_lookup = no_content_lookup
         self.created_payloads: list[dict] = []
 
     def get(self, url, headers=None, timeout=None):
         self.calls.append(("GET", url, None))
         if "/facade/api/v1/products?gtin=" in url:
+            if self.no_content_lookup:
+                return FakeResponse(204, text="", json_error=True)
             if self.existing:
                 return FakeResponse(
                     200,
@@ -570,6 +578,41 @@ class TeksherServiceTests(unittest.TestCase):
 
         self.assertEqual([""], draft_ids)
         self.assertEqual(1, len(session.created_payloads))
+
+    def test_ensure_product_drafts_treats_no_content_lookup_as_missing_product(self) -> None:
+        session = FakeSessionProducts(no_content_lookup=True)
+        service = TeksherService(browser=FakeBrowser(), session=session, sleep=lambda _: None)
+        config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
+
+        draft_ids = service.ensure_product_drafts_for_mapping(
+            _product_card(),
+            [
+                {
+                    "wb_size": "38",
+                    "teksher_size": "38 МЕЖДУНАРОДНЫЙ",
+                    "product_type": "КОСТЮМ СПОРТИВНЫЙ",
+                    "gtin": "04709055620626",
+                    "tnved": "6112120000",
+                    "country": "Кыргызстан",
+                    "color": "БЕЛЫЙ",
+                    "composition": "полиэстер 100%",
+                    "trademark": "ErLine",
+                }
+            ],
+            config,
+        )
+
+        self.assertEqual(["draft-1"], draft_ids)
+        self.assertEqual(1, len(session.created_payloads))
+
+    def test_product_mapping_rows_by_gtins_treats_no_content_lookup_as_missing_product(self) -> None:
+        session = FakeSessionProducts(no_content_lookup=True)
+        service = TeksherService(browser=FakeBrowser(), session=session, sleep=lambda _: None)
+        config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
+
+        rows = service.product_mapping_rows_by_gtins(["04709055620626"], config)
+
+        self.assertEqual({}, rows)
 
     def test_product_mapping_rows_by_gtins_reads_teksher_product_details(self) -> None:
         session = FakeSessionProducts(existing=True)
