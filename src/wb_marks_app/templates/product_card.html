@@ -103,10 +103,10 @@
   .mapping-table .gtin-loaded { font-weight: 700; }
   .mapping-table .gtin-mismatch { color: #b42318; font-weight: 700; }
   .mapping-table .number { text-align: right; }
-  .wb-summary-table { min-width: 1210px; width: max-content; }
-  .wb-teksher-table { min-width: 1360px; width: max-content; }
-  .print-table { min-width: 470px; width: max-content; }
-  .order-table { min-width: 620px; width: max-content; }
+  .wb-summary-table { min-width: 1210px; width: 100%; }
+  .wb-teksher-table { min-width: 1360px; width: 100%; }
+  .print-table { min-width: 470px; width: 100%; }
+  .order-table { min-width: 620px; width: 100%; }
   .print-table th,
   .print-table td,
   .order-table th,
@@ -348,16 +348,16 @@
     <div class="table-scroll">
       <table class="mapping-table wb-summary-table">
         <colgroup>
-          <col style="width: 320px;" />
-          <col style="width: 155px;" />
-          <col style="width: 95px;" />
-          <col style="width: 92px;" />
-          <col style="width: 95px;" />
-          <col style="width: 130px;" />
-          <col style="width: 80px;" />
-          <col style="width: 120px;" />
-          <col style="width: 95px;" />
-          <col style="width: 70px;" />
+          <col style="width: 26%;" />
+          <col style="width: 13%;" />
+          <col style="width: 7%;" />
+          <col style="width: 7%;" />
+          <col style="width: 7%;" />
+          <col style="width: 10%;" />
+          <col style="width: 7%;" />
+          <col style="width: 11%;" />
+          <col style="width: 7%;" />
+          <col style="width: 5%;" />
         </colgroup>
         <thead>
           <tr>
@@ -399,19 +399,19 @@
     <div class="table-scroll">
       <table class="mapping-table wb-teksher-table">
         <colgroup>
-          <col style="width: 118px;" />
-          <col style="width: 58px;" />
-          <col style="width: 78px;" />
-          <col style="width: 62px;" />
-          <col style="width: 155px;" />
-          <col style="width: 118px;" />
-          <col style="width: 96px;" />
-          <col style="width: 105px;" />
-          <col style="width: 112px;" />
-          <col style="width: 82px;" />
-          <col style="width: 112px;" />
-          <col style="width: 170px;" />
-          <col style="width: 78px;" />
+          <col style="width: 8%;" />
+          <col style="width: 4%;" />
+          <col style="width: 5%;" />
+          <col style="width: 5%;" />
+          <col style="width: 13%;" />
+          <col style="width: 9%;" />
+          <col style="width: 7%;" />
+          <col style="width: 8%;" />
+          <col style="width: 9%;" />
+          <col style="width: 6%;" />
+          <col style="width: 9%;" />
+          <col style="width: 13%;" />
+          <col style="width: 4%;" />
         </colgroup>
         <thead>
           <tr>
@@ -419,7 +419,7 @@
             <th class="api-head">Размер</th>
             <th class="api-head">Рос. размер</th>
             <th class="teksher-head">Размер</th>
-            <th class="teksher-head">Полное наименование</th>
+            <th class="teksher-head">Вид товара</th>
             <th class="teksher-head">GTIN</th>
             <th class="teksher-head">ТНВЭД</th>
             <th class="teksher-head">Страна</th>
@@ -432,12 +432,12 @@
         </thead>
         <tbody>
           {% for row in product_card.rows %}
-          <tr data-wb-size="{{ row.wb_size }}" data-wb-barcode="{{ row.barcode }}" data-wb-ru-size="{{ row.ru_size }}" data-product-type="{{ row.product_type }}">
+          <tr data-wb-size="{{ row.wb_size }}" data-wb-barcode="{{ row.barcode }}" data-wb-ru-size="{{ row.ru_size }}" data-product-type="{{ row.product_type }}" data-full-name="{{ row.full_name }}">
             <td class="api-cell" title="{{ row.barcode }}">{{ row.barcode }}</td>
             <td class="api-cell" title="{{ row.wb_size }}">{{ row.wb_size }}</td>
             <td class="api-cell" title="{{ row.ru_size }}">{{ row.ru_size }}</td>
             <td class="teksher-cell" data-gtin-field="teksher_size" title="{{ row.teksher_size }}">{{ row.teksher_size }}</td>
-            <td class="teksher-cell" data-gtin-field="full_name" title="{{ row.full_name }}">{{ row.full_name }}</td>
+            <td class="teksher-cell" data-gtin-field="product_type" title="{{ row.product_type }}">{{ row.product_type }}</td>
             <td class="teksher-cell" data-gtin-field="gtin" title="{{ row.gtin }}">{{ row.gtin }}</td>
             <td class="teksher-cell" data-gtin-field="tnved" title="{{ row.tnved }}">{{ row.tnved }}</td>
             <td class="teksher-cell" data-gtin-field="country" title="{{ row.country }}">{{ row.country }}</td>
@@ -461,11 +461,11 @@
       <div class="table-scroll compact-scroll">
         <table class="mapping-table order-table">
           <colgroup>
-            <col style="width: 58px;" />
-            <col style="width: 135px;" />
-            <col style="width: 92px;" />
-            <col style="width: 110px;" />
-            <col style="width: 225px;" />
+            <col style="width: 10%;" />
+            <col style="width: 25%;" />
+            <col style="width: 15%;" />
+            <col style="width: 20%;" />
+            <col style="width: 30%;" />
           </colgroup>
           <thead>
             <tr>
@@ -519,10 +519,10 @@
       <div class="table-scroll compact-scroll">
         <table class="mapping-table print-table">
           <colgroup>
-            <col style="width: 135px;" />
-            <col style="width: 58px;" />
-            <col style="width: 78px;" />
-            <col style="width: 130px;" />
+            <col style="width: 32%;" />
+            <col style="width: 14%;" />
+            <col style="width: 18%;" />
+            <col style="width: 36%;" />
           </colgroup>
           <thead>
             <tr>
@@ -1349,6 +1349,7 @@
         wb_size: tr.dataset.wbSize || '',
         wb_ru_size: tr.dataset.wbRuSize || '',
         product_type: tr.dataset.productType || '',
+        full_name: tr.dataset.fullName || '',
       };
       tr.querySelectorAll('[data-gtin-field]').forEach((cell) => {
         row[cell.dataset.gtinField] = cell.textContent.trim();
@@ -1363,7 +1364,7 @@
       tnved: 'tnved',
       country: 'country',
       trademark: 'trademark',
-      full_name: 'full_name',
+      product_type: 'product_type',
       vendor_article: 'vendor_article',
       composition: 'composition',
       color: 'color',
@@ -1372,6 +1373,7 @@
     document.querySelectorAll('tr[data-wb-size]').forEach((tr) => {
       if (!tr.querySelector('[data-gtin-field="gtin"].gtin-loaded')) return;
       if (fields.product_type) tr.dataset.productType = fields.product_type;
+      if (fields.full_name) tr.dataset.fullName = fields.full_name;
       Object.entries(tableFieldMap).forEach(([draftKey, cellKey]) => {
         if (!fields[draftKey]) return;
         setLoadedCell(tr, cellKey, fields[draftKey]);
@@ -1401,8 +1403,9 @@
       if (!row) return;
       const productType = (row.functional_name || '').toUpperCase();
       tr.dataset.productType = productType;
+      tr.dataset.fullName = productFullNameFrom(row.functional_name);
       setLoadedCell(tr, 'teksher_size', row.size ? `${row.size} МЕЖДУНАРОДНЫЙ` : '');
-      setLoadedCell(tr, 'full_name', productFullNameFrom(row.functional_name), row.functional_name || '', wbCompare.product_type);
+      setLoadedCell(tr, 'product_type', productType, row.functional_name || '', wbCompare.product_type);
       setLoadedCell(tr, 'gtin', row.gtin || '');
       setLoadedCell(tr, 'tnved', wbDefaults.tnved);
       setLoadedCell(tr, 'country', wbDefaults.country);
@@ -1417,6 +1420,7 @@
   function clearGtinTable() {
     document.querySelectorAll('tr[data-wb-size]').forEach((tr) => {
       tr.dataset.productType = '';
+      tr.dataset.fullName = '';
     });
     document.querySelectorAll('[data-gtin-field]').forEach((cell) => {
       cell.textContent = '';
