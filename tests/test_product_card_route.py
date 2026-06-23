@@ -90,6 +90,9 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn('id="mark-order-button"', page.text)
             self.assertIn("data-order-status", page.text)
             self.assertIn("mark-orders", page.text)
+            self.assertIn('id="order-history-button"', page.text)
+            self.assertIn('id="order-history-panel"', page.text)
+            self.assertIn("Последние операции сверху", page.text)
             self.assertIn('data-gtin-field="gtin"', page.text)
             self.assertIn('data-gtin-field="tnved"', page.text)
             self.assertIn('data-gtin-field="target_gender"', page.text)
@@ -769,6 +772,39 @@ class ProductCardRouteTests(unittest.TestCase):
             webapp.workflow_service = old_workflow_service
             webapp._get_user_run = old_get_user_run
             webapp._serialize_product_card_order_run = old_serialize_product_card_order_run
+
+    def test_mark_order_history_endpoint_returns_latest_first(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from wb_marks_app.models import AppConfig
+
+        old_create_all = webapp.create_all
+        old_load_config = webapp.load_config
+        old_session_scope = webapp.session_scope
+        old_product_card_order_history = webapp._product_card_order_history
+        webapp.create_all = lambda: None
+        webapp.load_config = lambda: AppConfig(secret_key="test-secret")
+        webapp.session_scope = lambda: FakeSessionScope()
+        webapp._product_card_order_history = lambda _session, user_id, wb_article: [
+            {"run": {"id": "new-run", "created_at": "2026-06-23T10:00:00"}, "items": []},
+            {"run": {"id": "old-run", "created_at": "2026-06-23T09:00:00"}, "items": []},
+        ]
+        try:
+            app = webapp.create_app()
+            client = TestClient(app)
+            client.cookies.set("wb_marks_session", _session_cookie({"user_id": "user-1", "login": "tester"}, "test-secret"))
+
+            response = client.get("/api/product-cards/847012873/mark-orders")
+
+            self.assertEqual(200, response.status_code)
+            payload = response.json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(["new-run", "old-run"], [item["run"]["id"] for item in payload["history"]])
+            client.close()
+        finally:
+            webapp.create_all = old_create_all
+            webapp.load_config = old_load_config
+            webapp.session_scope = old_session_scope
+            webapp._product_card_order_history = old_product_card_order_history
 
 
 class FakeSessionScope:

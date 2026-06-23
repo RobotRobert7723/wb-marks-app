@@ -112,6 +112,35 @@
   }
   .order-run-status.error { color: #b42318; }
   .order-run-status.success { color: #3f6212; }
+  .order-history-panel {
+    border-top: 1px solid #dfe3eb;
+    margin-top: 14px;
+    padding-top: 14px;
+  }
+  .order-history-panel[hidden] { display: none; }
+  .order-history-title {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .order-history-title h3 {
+    font-size: 18px;
+    margin: 0;
+  }
+  .order-history-table {
+    min-width: 1160px;
+    width: 1160px;
+  }
+  .order-history-table th,
+  .order-history-table td {
+    height: 30px;
+    padding-bottom: 5px;
+    padding-top: 5px;
+    vertical-align: middle;
+  }
+  .order-history-op { white-space: normal; }
+  .order-history-op strong { display: block; }
   .section-title { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; }
   .section-title h2 { margin: 0; }
   .split-actions { display: grid; gap: 20px; grid-template-columns: minmax(520px, 1fr) minmax(360px, .65fr); }
@@ -448,8 +477,47 @@
       </div>
       <div class="actions" style="margin-top: 14px;">
         <button type="button" class="secondary" id="mark-order-button">Заказать ЧЗ в Текшер</button>
+        <button type="button" class="secondary" id="order-history-button">История заказов</button>
       </div>
       <div id="mark-order-status" class="order-run-status" role="status" aria-live="polite"></div>
+      <div id="order-history-panel" class="order-history-panel" hidden>
+        <div class="order-history-title">
+          <h3>История заказов</h3>
+          <span class="muted">Последние операции сверху</span>
+        </div>
+        <div id="order-history-message" class="order-run-status" role="status" aria-live="polite"></div>
+        <div class="table-scroll">
+          <table class="mapping-table order-history-table">
+            <colgroup>
+              <col style="width: 145px;" />
+              <col style="width: 70px;" />
+              <col style="width: 145px;" />
+              <col style="width: 70px;" />
+              <col style="width: 145px;" />
+              <col style="width: 175px;" />
+              <col style="width: 140px;" />
+              <col style="width: 140px;" />
+              <col style="width: 140px;" />
+              <col style="width: 90px;" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th class="template-head">Дата запуска</th>
+                <th class="template-head">Размер</th>
+                <th class="template-head">GTIN</th>
+                <th class="template-head">Кол-во</th>
+                <th class="template-head">Статус</th>
+                <th class="template-head">Документ</th>
+                <th class="template-head">Эмиссия</th>
+                <th class="template-head">Нанесение</th>
+                <th class="template-head">Трансгран</th>
+                <th class="template-head">CSV</th>
+              </tr>
+            </thead>
+            <tbody id="order-history-body"></tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <div class="card">
@@ -517,6 +585,10 @@
   const markOrderButton = document.getElementById('mark-order-button');
   const markOrderStatus = document.getElementById('mark-order-status');
   const markOrderInitialState = document.getElementById('mark-order-initial-state');
+  const orderHistoryButton = document.getElementById('order-history-button');
+  const orderHistoryPanel = document.getElementById('order-history-panel');
+  const orderHistoryBody = document.getElementById('order-history-body');
+  const orderHistoryMessage = document.getElementById('order-history-message');
   if (!page || !uploadButton || !input || !saveButton || !status) return;
 
   let hasUnsavedGtin = false;
@@ -573,6 +645,9 @@
   if (markOrderButton) {
     markOrderButton.addEventListener('click', () => startMarkOrder());
   }
+  if (orderHistoryButton) {
+    orderHistoryButton.addEventListener('click', () => toggleOrderHistory());
+  }
   hydrateInitialMarkOrderState();
 
   input.addEventListener('change', async () => {
@@ -604,6 +679,137 @@
       input.value = '';
     }
   });
+
+  async function toggleOrderHistory() {
+    if (!orderHistoryPanel) return;
+    if (!orderHistoryPanel.hidden) {
+      orderHistoryPanel.hidden = true;
+      return;
+    }
+    orderHistoryPanel.hidden = false;
+    await loadOrderHistory();
+  }
+
+  async function loadOrderHistory(silent = false) {
+    if (!orderHistoryBody) return;
+    if (!silent) {
+      setOrderHistoryMessage('Загружаем историю заказов...', '');
+      if (orderHistoryButton) orderHistoryButton.disabled = true;
+    }
+    try {
+      const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/mark-orders`);
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        setOrderHistoryMessage(payload.message || 'Не удалось загрузить историю заказов.', 'error');
+        return;
+      }
+      renderOrderHistory(payload.history || []);
+      if (!silent) setOrderHistoryMessage('', '');
+    } catch (error) {
+      setOrderHistoryMessage('Не удалось загрузить историю заказов.', 'error');
+    } finally {
+      if (!silent && orderHistoryButton) orderHistoryButton.disabled = false;
+    }
+  }
+
+  function renderOrderHistory(history) {
+    if (!orderHistoryBody) return;
+    orderHistoryBody.replaceChildren();
+    const rows = [];
+    const runs = Array.isArray(history) ? history.slice() : [];
+    runs.sort((left, right) => timestamp(right.run?.created_at) - timestamp(left.run?.created_at));
+    runs.forEach((runPayload) => {
+      const items = Array.isArray(runPayload.items) ? runPayload.items : [];
+      items.forEach((item) => rows.push({ run: runPayload.run || {}, item }));
+    });
+    if (rows.length === 0) {
+      setOrderHistoryMessage('История заказов пока пустая.', '');
+      return;
+    }
+    rows.forEach(({ run, item }) => {
+      const tr = document.createElement('tr');
+      appendTextCell(tr, formatDateTime(run.created_at));
+      appendTextCell(tr, item.size || '');
+      appendTextCell(tr, item.gtin || '');
+      appendTextCell(tr, item.quantity || '');
+      appendTextCell(tr, item.status_text || item.status || '', item.status === 'failed' ? 'error' : '');
+      appendTextCell(tr, item.document_number || '');
+      appendOperationCell(tr, item, 'order');
+      appendOperationCell(tr, item, 'marking');
+      appendOperationCell(tr, item, 'transgran');
+      appendCsvCell(tr, item);
+      orderHistoryBody.appendChild(tr);
+    });
+  }
+
+  function appendTextCell(tr, value, kind = '') {
+    const td = document.createElement('td');
+    td.className = `template-cell${kind === 'error' ? ' order-status-cell error' : ''}`;
+    td.textContent = value ? String(value) : '-';
+    td.title = td.textContent;
+    tr.appendChild(td);
+  }
+
+  function appendOperationCell(tr, item, kind) {
+    const td = document.createElement('td');
+    td.className = 'template-cell order-history-op';
+    const op = findOperation(item, kind);
+    if (!op) {
+      td.textContent = '-';
+    } else if (op.status === 'skipped') {
+      td.textContent = 'Пропущен';
+    } else {
+      const id = document.createElement('strong');
+      id.textContent = op.external_operation_id || '-';
+      const state = document.createElement('span');
+      state.textContent = op.status || '';
+      td.append(id, state);
+    }
+    tr.appendChild(td);
+  }
+
+  function appendCsvCell(tr, item) {
+    const td = document.createElement('td');
+    td.className = 'template-cell';
+    if (item.artifact_id) {
+      const link = document.createElement('a');
+      link.href = `/api/artifacts/${encodeURIComponent(item.artifact_id)}`;
+      link.textContent = item.artifact_name || 'CSV';
+      td.appendChild(link);
+    } else {
+      td.textContent = '-';
+    }
+    tr.appendChild(td);
+  }
+
+  function findOperation(item, kind) {
+    const operations = Array.isArray(item.operations) ? item.operations : [];
+    return operations.find((operation) => operation.kind === kind);
+  }
+
+  function setOrderHistoryMessage(message, kind) {
+    if (!orderHistoryMessage) return;
+    orderHistoryMessage.textContent = message || '';
+    orderHistoryMessage.className = `order-run-status ${kind || ''}`.trim();
+  }
+
+  function timestamp(value) {
+    const parsed = Date.parse(value || '');
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function formatDateTime(value) {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return parsed.toLocaleString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
 
   function hydrateInitialMarkOrderState() {
     if (!markOrderInitialState || !markOrderInitialState.textContent.trim()) return;
@@ -651,6 +857,7 @@
       currentMarkOrderRunId = payload.run_id || '';
       setMarkOrderStatus(payload.message || 'Заказ ЧЗ в Текшер запущен.', 'success');
       applyMarkOrderStatus(payload.status || {});
+      if (orderHistoryPanel && !orderHistoryPanel.hidden) loadOrderHistory(true);
       scheduleMarkOrderPolling();
     } catch (error) {
       setMarkOrderStatus('Не удалось запустить заказ ЧЗ.', 'error');
@@ -698,6 +905,7 @@
         return;
       }
       applyMarkOrderStatus(payload.status || {});
+      if (orderHistoryPanel && !orderHistoryPanel.hidden) loadOrderHistory(true);
     } catch (error) {
       setMarkOrderStatus('Не удалось обновить статус заказа ЧЗ.', 'error');
     }

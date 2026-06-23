@@ -601,6 +601,17 @@ def create_app() -> FastAPI:
             "status": status_payload,
         }
 
+    @app.get("/api/product-cards/{wb_article}/mark-orders")
+    def list_product_card_mark_orders(request: Request, wb_article: str):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        with session_scope() as session:
+            return {
+                "ok": True,
+                "history": _product_card_order_history(session, user_id, wb_article),
+            }
+
     @app.get("/api/product-cards/{wb_article}/mark-orders/{run_id}")
     def get_product_card_mark_order(request: Request, wb_article: str, run_id: str):
         user_id = _user_id_from_session(request)
@@ -863,6 +874,18 @@ def _latest_product_card_order_run_state(session: Session, user_id: str, wb_arti
     if run is None:
         return {}
     return _serialize_product_card_order_run(run, session)
+
+
+def _product_card_order_history(session: Session, user_id: str, wb_article: str) -> list[dict]:
+    if not hasattr(session, "execute"):
+        return []
+    runs = session.execute(
+        select(WorkflowRunModel)
+        .where(WorkflowRunModel.user_id == user_id)
+        .where(WorkflowRunModel.source_url == f"/product-cards/{wb_article}")
+        .order_by(WorkflowRunModel.created_at.desc())
+    ).scalars().all()
+    return [_serialize_product_card_order_run(run, session) for run in runs]
 
 
 def _serialize_item(item: WorkflowRunItemModel, session: Session) -> dict:
