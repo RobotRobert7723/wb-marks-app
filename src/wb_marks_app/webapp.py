@@ -437,6 +437,9 @@ def create_app() -> FastAPI:
             mapping_version,
             teksher_rows_by_gtin,
         )
+        with session_scope() as session:
+            ready_to_print_counts = _product_card_ready_to_print_counts(session, user_id, product_card.wb_article)
+        product_card = _apply_product_card_ready_to_print_counts(product_card, ready_to_print_counts)
         if teksher_status:
             product_card = replace(product_card, api_status=(product_card.api_status + teksher_status).strip())
         return templates.TemplateResponse(
@@ -870,6 +873,44 @@ def _product_card_order_history(session: Session, user_id: str, wb_article: str)
         .order_by(WorkflowRunModel.created_at.desc())
     ).scalars().all()
     return [_serialize_product_card_order_run(run, session) for run in runs]
+
+
+def _product_card_ready_to_print_counts(session: Session, user_id: str, wb_article: str) -> dict[str, int]:
+    if not hasattr(session, "execute"):
+        return {}
+    rows = session.execute(
+        select(WorkflowRunItemModel, TeksherOperationModel)
+        .join(WorkflowRunModel, WorkflowRunModel.id == WorkflowRunItemModel.run_id)
+        .outerjoin(
+            TeksherOperationModel,
+            (TeksherOperationModel.run_item_id == WorkflowRunItemModel.id)
+            & (TeksherOperationModel.operation_kind == "marking"),
+        )
+        .where(WorkflowRunModel.user_id == user_id)
+        .where(WorkflowRunModel.source_url == f"/product-cards/{wb_article}")
+        .order_by(WorkflowRunModel.created_at.desc(), WorkflowRunItemModel.created_at.desc())
+    ).all()
+    counts: dict[str, int] = {}
+    seen: set[str] = set()
+    for item, marking in rows:
+        size_key = _product_card_size_key(item.size)
+        if not size_key or size_key in seen:
+            continue
+        seen.add(size_key)
+        counts[size_key] = item.quantity if marking is not None and str(marking.status or "").upper() == "ACCEPTED" else 0
+    return counts
+
+
+def _apply_product_card_ready_to_print_counts(product_card, counts: dict[str, int]):
+    rows = [
+        replace(row, print_count=max(int(counts.get(_product_card_size_key(row.wb_size), 0) or 0), 0))
+        for row in product_card.rows
+    ]
+    return replace(product_card, rows=rows)
+
+
+def _product_card_size_key(value: str) -> str:
+    return str(value or "").strip().casefold()
 
 
 def _serialize_item(item: WorkflowRunItemModel, session: Session) -> dict:

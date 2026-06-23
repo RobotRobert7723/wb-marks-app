@@ -1,6 +1,7 @@
 import json
 import unittest
 from dataclasses import replace
+from datetime import datetime, timezone
 from base64 import b64encode
 from io import BytesIO
 
@@ -79,7 +80,10 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn("Карточка WB 847012873", page.text)
             self.assertIn('data-wb-article="847012873"', page.text)
             self.assertIn("/product-cards/847012873", page.text)
-            self.assertIn("Готовы к нанесению", page.text)
+            self.assertIn("Готовы к печати", page.text)
+            self.assertNotIn("Готовы к нанесению", page.text)
+            self.assertNotIn("<th class=\"template-head\">Напечатать</th>", page.text)
+            self.assertIn("data-ready-print", page.text)
             self.assertIn("Заказ ЧЗ в Текшер", page.text)
             self.assertIn('data-order-gtin', page.text)
             self.assertIn('class="order-count-input"', page.text)
@@ -810,6 +814,78 @@ class ProductCardRouteTests(unittest.TestCase):
             webapp.load_config = old_load_config
             webapp.session_scope = old_session_scope
             webapp._product_card_order_history = old_product_card_order_history
+
+    def test_ready_to_print_counts_use_latest_marking_operation(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session
+        from wb_marks_app.db import Base
+        from wb_marks_app.server_models import TeksherOperationModel, WorkflowRunItemModel, WorkflowRunModel
+
+        engine = create_engine("sqlite:///:memory:", future=True)
+        Base.metadata.create_all(engine)
+        with Session(engine) as session:
+            old_run = WorkflowRunModel(
+                user_id="user-1",
+                draft_id="old",
+                source_url="/product-cards/847012873",
+                status="completed",
+                created_at=datetime(2026, 6, 23, 9, 0, tzinfo=timezone.utc),
+            )
+            old_item = WorkflowRunItemModel(
+                run=old_run,
+                barcode="2049271462689",
+                vendor_code="cv_nk_blue_smr",
+                size="38",
+                gtin="04709055620664",
+                quantity=3,
+                status="completed",
+                created_at=datetime(2026, 6, 23, 9, 0, tzinfo=timezone.utc),
+            )
+            old_marking = TeksherOperationModel(run_item=old_item, operation_kind="marking", status="ACCEPTED")
+            failed_run = WorkflowRunModel(
+                user_id="user-1",
+                draft_id="new",
+                source_url="/product-cards/847012873",
+                status="partial_failed",
+                created_at=datetime(2026, 6, 23, 10, 0, tzinfo=timezone.utc),
+            )
+            failed_item = WorkflowRunItemModel(
+                run=failed_run,
+                barcode="2049271462689",
+                vendor_code="cv_nk_blue_smr",
+                size="38",
+                gtin="04709055620664",
+                quantity=5,
+                status="failed",
+                created_at=datetime(2026, 6, 23, 10, 0, tzinfo=timezone.utc),
+            )
+            failed_marking = TeksherOperationModel(run_item=failed_item, operation_kind="marking", status="REJECTED")
+            accepted_run = WorkflowRunModel(
+                user_id="user-1",
+                draft_id="accepted",
+                source_url="/product-cards/847012873",
+                status="completed",
+                created_at=datetime(2026, 6, 23, 11, 0, tzinfo=timezone.utc),
+            )
+            accepted_item = WorkflowRunItemModel(
+                run=accepted_run,
+                barcode="2049271462641",
+                vendor_code="cv_nk_blue_smr",
+                size="40",
+                gtin="04709055620671",
+                quantity=2,
+                status="completed",
+                created_at=datetime(2026, 6, 23, 11, 0, tzinfo=timezone.utc),
+            )
+            accepted_marking = TeksherOperationModel(run_item=accepted_item, operation_kind="marking", status="ACCEPTED")
+            session.add_all([old_marking, failed_marking, accepted_marking])
+            session.commit()
+
+            counts = webapp._product_card_ready_to_print_counts(session, "user-1", "847012873")
+
+        self.assertEqual(0, counts["38"])
+        self.assertEqual(2, counts["40"])
 
 
 class FakeSessionScope:

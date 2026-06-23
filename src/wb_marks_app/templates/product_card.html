@@ -45,7 +45,7 @@
   .upload-confirm span { color: #344054; font-weight: 700; }
   .upload-confirm button { min-width: 72px; padding: 9px 14px; }
   .table-scroll { border: 1px solid #dfe3eb; overflow: auto; }
-  .table-scroll.compact-scroll { display: inline-block; max-width: 100%; vertical-align: top; }
+  .table-scroll.compact-scroll { display: block; max-width: 100%; vertical-align: top; width: 100%; }
   .mapping-table {
     background: white;
     border-collapse: collapse;
@@ -76,8 +76,8 @@
   .mapping-table .number { text-align: right; }
   .wb-summary-table { min-width: 1380px; }
   .wb-teksher-table { min-width: 1660px; }
-  .print-table { min-width: 680px; width: 680px; }
-  .order-table { min-width: 780px; width: 780px; }
+  .print-table { min-width: 520px; width: 100%; }
+  .order-table { min-width: 780px; width: 100%; }
   .print-table th,
   .print-table td,
   .order-table th,
@@ -137,7 +137,7 @@
   .order-history-op strong { display: block; }
   .section-title { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; }
   .section-title h2 { margin: 0; }
-  .split-actions { display: grid; gap: 20px; grid-template-columns: minmax(520px, 1fr) minmax(360px, .65fr); }
+  .split-actions { display: grid; gap: 20px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .empty-cell { color: #98a2b3; }
   .draft-modal[hidden] { display: none; }
   .draft-modal {
@@ -487,25 +487,22 @@
             <col style="width: 70px;" />
             <col style="width: 95px;" />
             <col style="width: 155px;" />
-            <col style="width: 120px;" />
           </colgroup>
           <thead>
             <tr>
               <th class="template-head">Баркоды</th>
               <th class="template-head">Размер</th>
               <th class="template-head">Рос. размер</th>
-              <th class="template-head">Готовы к нанесению</th>
-              <th class="template-head">Напечатать</th>
+              <th class="template-head">Готовы к печати</th>
             </tr>
           </thead>
           <tbody>
             {% for row in product_card.rows %}
-            <tr>
+            <tr data-print-row-size="{{ row.wb_size }}">
               <td class="template-cell">{{ row.barcode }}</td>
               <td class="template-cell">{{ row.wb_size }}</td>
               <td class="template-cell">{{ row.ru_size }}</td>
-              <td class="template-cell number">{{ row.ready_to_mark }}</td>
-              <td class="template-cell number">{{ row.print_count }}</td>
+              <td class="template-cell number" data-ready-print>{{ row.print_count }}</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -895,6 +892,7 @@
     items.forEach((item) => {
       const isError = item.status === 'failed' || Boolean(item.error);
       setOrderRowStatus(item.size || '', item.status_text || item.error || item.status || '', isError ? 'error' : '');
+      updateReadyPrintCount(item);
     });
     const runStatus = payload.run && payload.run.status ? payload.run.status : '';
     if (runStatus === 'completed' || runStatus === 'partial_failed' || runStatus === 'cancelled') {
@@ -920,6 +918,20 @@
       cell.textContent = message || '';
       cell.title = message || '';
       cell.classList.toggle('error', kind === 'error');
+    });
+  }
+
+  function updateReadyPrintCount(item) {
+    const operations = Array.isArray(item.operations) ? item.operations : [];
+    const marking = operations.find((operation) => operation.kind === 'marking');
+    if (!marking || String(marking.status || '').toUpperCase() !== 'ACCEPTED') return;
+    document.querySelectorAll('tr[data-print-row-size]').forEach((tr) => {
+      if (normalize(tr.dataset.printRowSize || '') !== normalize(item.size || '')) return;
+      const cell = tr.querySelector('[data-ready-print]');
+      if (!cell) return;
+      const quantity = Number.parseInt(item.quantity || '0', 10) || 0;
+      cell.textContent = String(quantity);
+      cell.title = String(quantity);
     });
   }
 
