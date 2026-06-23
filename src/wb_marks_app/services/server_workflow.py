@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select
@@ -61,6 +61,57 @@ class WorkflowRunService:
                 session.add(run)
                 session.flush()
                 run_id = run.id
+        self.start_background(run_id)
+        return run_id
+
+    def create_product_card_run(self, user_id: str, wb_article: str, product_card, rows: list[dict]) -> str:
+        clean_rows = self._product_card_rows(product_card, rows)
+        if not clean_rows:
+            raise ValueError("Нет строк с количеством к заказу.")
+
+        started_at = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        draft_id = f"CARD-{wb_article}-{started_at}"
+        with session_scope() as session:
+            run = WorkflowRunModel(
+                user_id=user_id,
+                draft_id=draft_id,
+                source_url=f"/product-cards/{wb_article}",
+                status="created",
+                summary_json=json.dumps(
+                    {
+                        "source": "product_card",
+                        "wb_article": wb_article,
+                    },
+                    ensure_ascii=True,
+                ),
+            )
+            session.add(run)
+            session.flush()
+            for row in clean_rows:
+                item = WorkflowRunItemModel(
+                    run_id=run.id,
+                    barcode=row["barcode"],
+                    vendor_code=row["vendor_code"],
+                    size=row["size"],
+                    gtin=row["gtin"],
+                    quantity=row["quantity"],
+                    wb_item_name=row["name"],
+                    status="pending",
+                )
+                session.add(item)
+                session.flush()
+                if not row["transgran"]:
+                    session.add(
+                        TeksherOperationModel(
+                            run_item_id=item.id,
+                            operation_kind="transgran",
+                            external_operation_id="",
+                            status="skipped",
+                            payload_json=json.dumps({"enabled": False}, ensure_ascii=True),
+                        )
+                    )
+            run_id = run.id
+
         self.start_background(run_id)
         return run_id
 
@@ -152,12 +203,19 @@ class WorkflowRunService:
             failed = sum(1 for item in run.items if item.status == "failed")
             completed = sum(1 for item in run.items if item.status == "completed")
             run.status = "partial_failed" if failed else "completed"
-            run.summary_json = json.dumps(
+            try:
+                summary = json.loads(run.summary_json or "{}")
+            except json.JSONDecodeError:
+                summary = {}
+            summary.update(
                 {
                     "completed_items": completed,
                     "failed_items": failed,
                     "total_items": len(run.items),
-                },
+                }
+            )
+            run.summary_json = json.dumps(
+                summary,
                 ensure_ascii=True,
             )
 
@@ -206,6 +264,9 @@ class WorkflowRunService:
         teksher = TeksherService(browser=_NullBrowser(), logger=lambda msg: None)
 
         try:
+            item.error = ""
+            item.status = "order_running"
+            session.commit()
             order_op = self._get_or_create_operation(
                 session,
                 item,
@@ -213,31 +274,47 @@ class WorkflowRunService:
                 lambda: teksher.create_mark_code_order(item.gtin, item.quantity, config),
             )
             item.document_number = self._document_number(run, item, config)
-            item.status = "order_created"
+            order_op.status = order_op.status or "created"
+            session.commit()
             order_details = teksher.wait_for_order_ready(order_op.external_operation_id, config)
             order_op.status = str(order_details.get("status") or "ACCEPTED")
             order_op.end_at = str(order_details.get("endAt") or "")
+            item.status = "order_completed"
+            session.commit()
 
+            item.status = "marking_running"
+            session.commit()
             marking_op = self._get_or_create_operation(
                 session,
                 item,
                 "marking",
                 lambda: teksher.create_marking_operation(order_op.external_operation_id, config),
             )
-            item.status = "marking_created"
+            marking_op.status = marking_op.status or "created"
+            session.commit()
             marking_details = teksher.wait_for_operation(marking_op.external_operation_id, "ACCEPTED", config)
             marking_op.status = str(marking_details.get("status") or "ACCEPTED")
             marking_op.end_at = str(marking_details.get("endAt") or "")
             item.status = "marking_completed"
+            session.commit()
 
             if not artifact_path.exists():
                 teksher.save_operation_csv(marking_op.external_operation_id, artifact_path, config)
             self._upsert_artifact(session, item, artifact_path)
             self._store_mark_codes(session, item, teksher.read_operation_codes(marking_op.external_operation_id, config))
             item.status = "csv_saved"
+            session.commit()
 
             transgran_op = self._find_operation(session, item, "transgran")
-            if transgran_op is None:
+            if transgran_op is not None and transgran_op.status == "skipped":
+                item.status = "completed"
+                item.error = ""
+                session.commit()
+                return
+
+            item.status = "transgran_running"
+            session.commit()
+            if transgran_op is None or not transgran_op.external_operation_id:
                 doc_date, ship_date = teksher.resolve_transgran_dates(
                     marking_op.external_operation_id,
                     requested_document_date=datetime.now(),
@@ -252,27 +329,35 @@ class WorkflowRunService:
                     shipment_date=ship_date,
                     config=config,
                 )
-                transgran_op = TeksherOperationModel(
-                    run_item_id=item.id,
-                    operation_kind="transgran",
-                    external_operation_id=transgran_id,
-                    status="created",
-                    payload_json=json.dumps(
-                        {
-                            "document_number": item.document_number,
-                            "document_date": doc_date.isoformat(timespec="seconds"),
-                            "shipment_date": ship_date.isoformat(timespec="seconds"),
-                        },
-                        ensure_ascii=True,
-                    ),
+                payload_json = json.dumps(
+                    {
+                        "document_number": item.document_number,
+                        "document_date": doc_date.isoformat(timespec="seconds"),
+                        "shipment_date": ship_date.isoformat(timespec="seconds"),
+                    },
+                    ensure_ascii=True,
                 )
-                session.add(transgran_op)
+                if transgran_op is None:
+                    transgran_op = TeksherOperationModel(
+                        run_item_id=item.id,
+                        operation_kind="transgran",
+                        external_operation_id=transgran_id,
+                        status="created",
+                        payload_json=payload_json,
+                    )
+                    session.add(transgran_op)
+                else:
+                    transgran_op.external_operation_id = transgran_id
+                    transgran_op.status = "created"
+                    transgran_op.payload_json = payload_json
             item.status = "completed"
             item.error = ""
+            session.commit()
         except Exception as exc:
             item.status = "failed"
             item.error = str(exc)
             run.status = "partial_failed"
+            session.commit()
             raise
 
     def _get_or_create_operation(self, session: Session, item: WorkflowRunItemModel, kind: str, factory) -> TeksherOperationModel:
@@ -331,3 +416,36 @@ class WorkflowRunService:
     def _document_number(self, run: WorkflowRunModel, item: WorkflowRunItemModel, config: AppConfig) -> str:
         prefix = config.transgran_document_number_prefix or "WB"
         return f"{prefix}-{run.draft_id}-{item.vendor_code}_{item.size}"
+
+    def _product_card_rows(self, product_card, rows: list[dict]) -> list[dict]:
+        product_rows_by_size = {self._row_key(row.wb_size): row for row in product_card.rows}
+        result: list[dict] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            size = str(row.get("size") or row.get("wb_size") or "").strip()
+            gtin = str(row.get("gtin") or "").strip()
+            try:
+                quantity = int(row.get("quantity") or 0)
+            except (TypeError, ValueError):
+                quantity = 0
+            if not size or not gtin or quantity <= 0:
+                continue
+            product_row = product_rows_by_size.get(self._row_key(size))
+            if product_row is None:
+                continue
+            result.append(
+                {
+                    "size": size,
+                    "gtin": gtin,
+                    "quantity": quantity,
+                    "barcode": product_row.barcode,
+                    "vendor_code": product_card.wb_summary.seller_article,
+                    "name": product_card.wb_summary.name,
+                    "transgran": bool(row.get("transgran", True)),
+                }
+            )
+        return result
+
+    def _row_key(self, value: str) -> str:
+        return str(value or "").strip().casefold()

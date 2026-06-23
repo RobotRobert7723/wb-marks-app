@@ -86,6 +86,10 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn("Трансгран", page.text)
             self.assertIn('class="transgran-checkbox"', page.text)
             self.assertIn("checked", page.text)
+            self.assertIn("Статус", page.text)
+            self.assertIn('id="mark-order-button"', page.text)
+            self.assertIn("data-order-status", page.text)
+            self.assertIn("mark-orders", page.text)
             self.assertIn('data-gtin-field="gtin"', page.text)
             self.assertIn('data-gtin-field="tnved"', page.text)
             self.assertIn('data-gtin-field="target_gender"', page.text)
@@ -661,6 +665,111 @@ class ProductCardRouteTests(unittest.TestCase):
             webapp.teksher_mapping_service = old_teksher_mapping_service
             webapp.teksher_product_service = old_teksher_product_service
 
+    def test_mark_order_endpoint_starts_product_card_run(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from wb_marks_app.models import AppConfig
+        from wb_marks_app.services.product_cards import ProductCardTemplate, ProductCardMappingRow, WbProductSummary
+
+        old_create_all = webapp.create_all
+        old_load_config = webapp.load_config
+        old_session_scope = webapp.session_scope
+        old_get_or_create_settings = webapp.get_or_create_settings
+        old_settings_to_app_config = webapp.settings_to_app_config
+        old_product_card_service = webapp.product_card_service
+        old_workflow_service = webapp.workflow_service
+        old_get_user_run = webapp._get_user_run
+        old_serialize_product_card_order_run = webapp._serialize_product_card_order_run
+        fake_workflow_service = FakeWorkflowRunService()
+        webapp.create_all = lambda: None
+        webapp.load_config = lambda: AppConfig(secret_key="test-secret")
+        webapp.session_scope = lambda: FakeSessionScope()
+        webapp.get_or_create_settings = lambda _session, _user_id: object()
+        webapp.settings_to_app_config = lambda _settings: AppConfig(wb_api_token="token")
+        webapp.workflow_service = fake_workflow_service
+        webapp._get_user_run = lambda _session, run_id, _user_id: type("Run", (), {"id": run_id, "status": "created"})()
+        webapp._serialize_product_card_order_run = lambda run, _session: {
+            "run": {"id": run.id, "status": run.status},
+            "items": [{"size": "38", "gtin": "04709055620626", "status_text": "Ожидает запуска"}],
+        }
+        webapp.product_card_service = FakeProductCardService(
+            ProductCardTemplate(
+                wb_article="847012873",
+                image_url="",
+                api_status="",
+                wb_summary=WbProductSummary(
+                    name="Sport suit",
+                    seller_category="Sport suits",
+                    wb_article="847012873",
+                    tnved="6112120000",
+                    country="KG",
+                    seller_article="cv_nk_white_smr",
+                    color="white",
+                    composition="polyester 100%",
+                    gender="boys",
+                    brand="ErLine",
+                ),
+                rows=[
+                    ProductCardMappingRow(
+                        barcode="2049271462689",
+                        wb_size="38",
+                        ru_size="134",
+                        teksher_size="",
+                        product_type="",
+                        gtin="04709055620626",
+                        tnved="",
+                        country="",
+                        vendor_article="",
+                        color="",
+                        composition="",
+                        target_gender="",
+                        trademark="",
+                        ready_to_mark=0,
+                        print_count=0,
+                        order_count=0,
+                    )
+                ],
+            )
+        )
+        try:
+            app = webapp.create_app()
+            client = TestClient(app)
+            client.cookies.set("wb_marks_session", _session_cookie({"user_id": "user-1", "login": "tester"}, "test-secret"))
+
+            response = client.post(
+                "/api/product-cards/847012873/mark-orders",
+                json={
+                    "rows": [
+                        {
+                            "size": "38",
+                            "gtin": "04709055620626",
+                            "quantity": 2,
+                            "transgran": False,
+                        }
+                    ]
+                },
+            )
+
+            self.assertEqual(200, response.status_code)
+            payload = response.json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual("run-1", payload["run_id"])
+            self.assertEqual("user-1", fake_workflow_service.calls[0]["user_id"])
+            self.assertEqual("847012873", fake_workflow_service.calls[0]["wb_article"])
+            self.assertEqual(2, fake_workflow_service.calls[0]["rows"][0]["quantity"])
+            self.assertFalse(fake_workflow_service.calls[0]["rows"][0]["transgran"])
+            self.assertEqual("Ожидает запуска", payload["status"]["items"][0]["status_text"])
+            client.close()
+        finally:
+            webapp.create_all = old_create_all
+            webapp.load_config = old_load_config
+            webapp.session_scope = old_session_scope
+            webapp.get_or_create_settings = old_get_or_create_settings
+            webapp.settings_to_app_config = old_settings_to_app_config
+            webapp.product_card_service = old_product_card_service
+            webapp.workflow_service = old_workflow_service
+            webapp._get_user_run = old_get_user_run
+            webapp._serialize_product_card_order_run = old_serialize_product_card_order_run
+
 
 class FakeSessionScope:
     def __enter__(self):
@@ -668,6 +777,22 @@ class FakeSessionScope:
 
     def __exit__(self, exc_type, exc, traceback):
         return False
+
+
+class FakeWorkflowRunService:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def create_product_card_run(self, user_id, wb_article, product_card, rows):
+        self.calls.append(
+            {
+                "user_id": user_id,
+                "wb_article": wb_article,
+                "product_card": product_card,
+                "rows": rows,
+            }
+        )
+        return "run-1"
 
 
 class FakeProductCardService:

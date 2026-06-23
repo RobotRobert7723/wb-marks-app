@@ -439,10 +439,12 @@ def create_app() -> FastAPI:
         )
         if teksher_status:
             product_card = replace(product_card, api_status=(product_card.api_status + teksher_status).strip())
+        with session_scope() as session:
+            order_run_state = _latest_product_card_order_run_state(session, user_id, product_card.wb_article)
         return templates.TemplateResponse(
             request,
             "product_card.html",
-            _base_context(request, product_card=product_card),
+            _base_context(request, product_card=product_card, order_run_state=order_run_state),
         )
 
     @app.post("/api/product-cards/{wb_article}/gtin-upload")
@@ -564,6 +566,52 @@ def create_app() -> FastAPI:
             "created_gtins": created_gtins,
             "existing_gtins": existing_gtins,
         }
+
+    @app.post("/api/product-cards/{wb_article}/mark-orders")
+    async def create_product_card_mark_order(request: Request, wb_article: str):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        try:
+            payload = await request.json()
+        except ValueError:
+            return JSONResponse({"ok": False, "message": "Некорректный JSON."}, status_code=400)
+        rows = payload.get("rows") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            return JSONResponse({"ok": False, "message": "Нет строк для заказа ЧЗ."}, status_code=400)
+
+        try:
+            with session_scope() as session:
+                settings = get_or_create_settings(session, user_id)
+                config = settings_to_app_config(settings)
+            product_card = product_card_service.build_template(wb_article, config)
+            run_id = workflow_service.create_product_card_run(user_id, product_card.wb_article, product_card, rows)
+            with session_scope() as session:
+                run = _get_user_run(session, run_id, user_id)
+                status_payload = _serialize_product_card_order_run(run, session)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+        except (AppError, ManualStepRequired) as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+
+        return {
+            "ok": True,
+            "message": "Заказ ЧЗ в Текшер запущен.",
+            "run_id": run_id,
+            "status": status_payload,
+        }
+
+    @app.get("/api/product-cards/{wb_article}/mark-orders/{run_id}")
+    def get_product_card_mark_order(request: Request, wb_article: str, run_id: str):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        with session_scope() as session:
+            run = _get_user_run(session, run_id, user_id)
+            return {
+                "ok": True,
+                "status": _serialize_product_card_order_run(run, session),
+            }
 
     @app.post("/labels/preview", response_class=HTMLResponse)
     def labels_preview_page(
@@ -803,6 +851,20 @@ def _serialize_run(run: WorkflowRunModel) -> dict:
     }
 
 
+def _latest_product_card_order_run_state(session: Session, user_id: str, wb_article: str) -> dict:
+    if not hasattr(session, "execute"):
+        return {}
+    run = session.execute(
+        select(WorkflowRunModel)
+        .where(WorkflowRunModel.user_id == user_id)
+        .where(WorkflowRunModel.source_url == f"/product-cards/{wb_article}")
+        .order_by(WorkflowRunModel.created_at.desc())
+    ).scalars().first()
+    if run is None:
+        return {}
+    return _serialize_product_card_order_run(run, session)
+
+
 def _serialize_item(item: WorkflowRunItemModel, session: Session) -> dict:
     artifact = session.execute(
         select(ArtifactModel)
@@ -834,6 +896,74 @@ def _serialize_item(item: WorkflowRunItemModel, session: Session) -> dict:
             for op in operations
         ],
     }
+
+
+def _serialize_product_card_order_run(run: WorkflowRunModel, session: Session) -> dict:
+    items = session.execute(
+        select(WorkflowRunItemModel)
+        .where(WorkflowRunItemModel.run_id == run.id)
+        .order_by(WorkflowRunItemModel.size)
+    ).scalars().all()
+    return {
+        "run": _serialize_run(run),
+        "items": [_serialize_product_card_order_item(item, session) for item in items],
+    }
+
+
+def _serialize_product_card_order_item(item: WorkflowRunItemModel, session: Session) -> dict:
+    artifact = session.execute(
+        select(ArtifactModel)
+        .where(ArtifactModel.run_item_id == item.id)
+        .where(ArtifactModel.kind == "csv")
+    ).scalars().first()
+    operations = session.execute(
+        select(TeksherOperationModel).where(TeksherOperationModel.run_item_id == item.id)
+    ).scalars().all()
+    operations_by_kind = {operation.operation_kind: operation for operation in operations}
+    return {
+        "id": item.id,
+        "size": item.size,
+        "gtin": item.gtin,
+        "quantity": item.quantity,
+        "document_number": item.document_number,
+        "status": item.status,
+        "status_text": _product_card_order_status_text(item, operations_by_kind),
+        "error": item.error,
+        "artifact_id": artifact.id if artifact else None,
+        "artifact_name": artifact.file_name if artifact else None,
+        "operations": [
+            {
+                "kind": operation.operation_kind,
+                "external_operation_id": operation.external_operation_id,
+                "status": operation.status,
+                "end_at": operation.end_at,
+            }
+            for operation in operations
+        ],
+    }
+
+
+def _product_card_order_status_text(item: WorkflowRunItemModel, operations_by_kind: dict[str, TeksherOperationModel]) -> str:
+    if item.status == "failed":
+        return item.error or "Ошибка выполнения операции."
+    if item.status in {"pending", "created"}:
+        return "Ожидает запуска"
+    if item.status in {"order_running", "order_created"}:
+        return "Эмиссия выполняется"
+    if item.status == "order_completed":
+        return "Эмиссия выполнена"
+    if item.status in {"marking_running", "marking_created"}:
+        return "Нанесение выполняется"
+    if item.status in {"marking_completed", "csv_saved"}:
+        return "Нанесение выполнено"
+    if item.status == "transgran_running":
+        return "Трансгран создается"
+    if item.status == "completed":
+        transgran = operations_by_kind.get("transgran")
+        if transgran is not None and transgran.status == "skipped":
+            return "Нанесение выполнено"
+        return "Трансгран создан"
+    return item.status
 
 
 def _settings_incomplete(settings: AppSettingsModel) -> bool:

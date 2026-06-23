@@ -77,7 +77,7 @@
   .wb-summary-table { min-width: 1380px; }
   .wb-teksher-table { min-width: 1660px; }
   .print-table { min-width: 680px; width: 680px; }
-  .order-table { min-width: 560px; width: 560px; }
+  .order-table { min-width: 780px; width: 780px; }
   .print-table th,
   .print-table td,
   .order-table th,
@@ -103,6 +103,15 @@
     vertical-align: middle;
     width: 16px;
   }
+  .order-status-cell { color: #475467; font-weight: 700; white-space: normal; }
+  .order-status-cell.error { color: #b42318; }
+  .order-run-status {
+    color: #475467;
+    font-weight: 700;
+    margin-top: 10px;
+  }
+  .order-run-status.error { color: #b42318; }
+  .order-run-status.success { color: #3f6212; }
   .section-title { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; }
   .section-title h2 { margin: 0; }
   .split-actions { display: grid; gap: 20px; grid-template-columns: minmax(520px, 1fr) minmax(360px, .65fr); }
@@ -397,6 +406,7 @@
             <col style="width: 190px;" />
             <col style="width: 120px;" />
             <col style="width: 140px;" />
+            <col style="width: 240px;" />
           </colgroup>
           <thead>
             <tr>
@@ -404,6 +414,7 @@
               <th class="template-head">GTIN</th>
               <th class="template-head">Трансгран</th>
               <th class="template-head">Заказать</th>
+              <th class="template-head">Статус</th>
             </tr>
           </thead>
           <tbody>
@@ -429,14 +440,16 @@
                   aria-label="Заказать размер {{ row.wb_size }}"
                 />
               </td>
+              <td class="template-cell order-status-cell" data-order-status></td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
       <div class="actions" style="margin-top: 14px;">
-        <button type="button" class="secondary">Заказать ЧЗ в Текшер</button>
+        <button type="button" class="secondary" id="mark-order-button">Заказать ЧЗ в Текшер</button>
       </div>
+      <div id="mark-order-status" class="order-run-status" role="status" aria-live="polite"></div>
     </div>
 
     <div class="card">
@@ -480,6 +493,7 @@
     </div>
   </div>
 </div>
+<script type="application/json" id="mark-order-initial-state">{{ order_run_state | default({}) | tojson }}</script>
 <script>
 (() => {
   const page = document.querySelector('.product-page');
@@ -500,9 +514,14 @@
   const draftClose = document.getElementById('draft-preview-close');
   const draftCancel = document.getElementById('draft-preview-cancel');
   const draftSave = document.getElementById('draft-preview-save');
+  const markOrderButton = document.getElementById('mark-order-button');
+  const markOrderStatus = document.getElementById('mark-order-status');
+  const markOrderInitialState = document.getElementById('mark-order-initial-state');
   if (!page || !uploadButton || !input || !saveButton || !status) return;
 
   let hasUnsavedGtin = false;
+  let currentMarkOrderRunId = '';
+  let markOrderPollTimer = null;
   const draftFieldDefinitions = [
     { key: 'full_name', label: 'Полное наименование товара', full: true },
     { key: 'tnved', label: 'Код ТН ВЭД', dictionary: true },
@@ -551,6 +570,10 @@
     draftSave.addEventListener('click', () => saveMapping(collectDraftFields()));
   }
   saveButton.addEventListener('click', () => requestSaveMapping());
+  if (markOrderButton) {
+    markOrderButton.addEventListener('click', () => startMarkOrder());
+  }
+  hydrateInitialMarkOrderState();
 
   input.addEventListener('change', async () => {
     const file = input.files && input.files[0];
@@ -581,6 +604,143 @@
       input.value = '';
     }
   });
+
+  function hydrateInitialMarkOrderState() {
+    if (!markOrderInitialState || !markOrderInitialState.textContent.trim()) return;
+    try {
+      const payload = JSON.parse(markOrderInitialState.textContent);
+      if (!payload || !payload.run || !payload.run.id) return;
+      currentMarkOrderRunId = payload.run.id;
+      if (markOrderButton && !['completed', 'partial_failed', 'cancelled'].includes(payload.run.status)) {
+        markOrderButton.disabled = true;
+      }
+      applyMarkOrderStatus(payload);
+      scheduleMarkOrderPolling();
+    } catch (error) {
+      return;
+    }
+  }
+
+  async function startMarkOrder() {
+    const { rows, hasMissingGtin } = collectMarkOrderRows();
+    if (hasMissingGtin) {
+      setMarkOrderStatus('Для выбранных строк нужен GTIN.', 'error');
+      return;
+    }
+    if (rows.length === 0) {
+      setMarkOrderStatus('Укажите количество для заказа ЧЗ.', 'error');
+      return;
+    }
+
+    setMarkOrderStatus('Запускаем заказ ЧЗ в Текшер...', '');
+    if (markOrderButton) markOrderButton.disabled = true;
+    rows.forEach((row) => setOrderRowStatus(row.size, 'Ожидает запуска', ''));
+
+    try {
+      const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/mark-orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        setMarkOrderStatus(payload.message || 'Не удалось запустить заказ ЧЗ.', 'error');
+        if (markOrderButton) markOrderButton.disabled = false;
+        return;
+      }
+      currentMarkOrderRunId = payload.run_id || '';
+      setMarkOrderStatus(payload.message || 'Заказ ЧЗ в Текшер запущен.', 'success');
+      applyMarkOrderStatus(payload.status || {});
+      scheduleMarkOrderPolling();
+    } catch (error) {
+      setMarkOrderStatus('Не удалось запустить заказ ЧЗ.', 'error');
+      if (markOrderButton) markOrderButton.disabled = false;
+    }
+  }
+
+  function collectMarkOrderRows() {
+    const rows = [];
+    let hasMissingGtin = false;
+    document.querySelectorAll('tr[data-order-row-size]').forEach((tr) => {
+      const inputElement = tr.querySelector('.order-count-input');
+      const quantity = Number.parseInt(inputElement ? inputElement.value : '0', 10) || 0;
+      if (quantity <= 0) return;
+      const gtin = (tr.querySelector('[data-order-gtin]')?.textContent || '').trim();
+      const size = tr.dataset.orderRowSize || '';
+      if (!gtin) {
+        hasMissingGtin = true;
+        setOrderRowStatus(size, 'Нет GTIN', 'error');
+        return;
+      }
+      rows.push({
+        size,
+        gtin,
+        quantity,
+        transgran: Boolean(tr.querySelector('.transgran-checkbox')?.checked),
+      });
+    });
+    return { rows, hasMissingGtin };
+  }
+
+  function scheduleMarkOrderPolling() {
+    if (markOrderPollTimer) clearInterval(markOrderPollTimer);
+    if (!currentMarkOrderRunId) return;
+    markOrderPollTimer = setInterval(() => pollMarkOrderStatus(), 30000);
+  }
+
+  async function pollMarkOrderStatus() {
+    if (!currentMarkOrderRunId) return;
+    try {
+      const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/mark-orders/${encodeURIComponent(currentMarkOrderRunId)}`);
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        setMarkOrderStatus(payload.message || 'Не удалось обновить статус заказа ЧЗ.', 'error');
+        return;
+      }
+      applyMarkOrderStatus(payload.status || {});
+    } catch (error) {
+      setMarkOrderStatus('Не удалось обновить статус заказа ЧЗ.', 'error');
+    }
+  }
+
+  function applyMarkOrderStatus(payload) {
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    items.forEach((item) => {
+      const isError = item.status === 'failed' || Boolean(item.error);
+      setOrderRowStatus(item.size || '', item.status_text || item.error || item.status || '', isError ? 'error' : '');
+    });
+    const runStatus = payload.run && payload.run.status ? payload.run.status : '';
+    if (runStatus === 'completed' || runStatus === 'partial_failed' || runStatus === 'cancelled') {
+      if (markOrderPollTimer) clearInterval(markOrderPollTimer);
+      markOrderPollTimer = null;
+      currentMarkOrderRunId = '';
+      if (markOrderButton) markOrderButton.disabled = false;
+      if (runStatus === 'completed') {
+        setMarkOrderStatus('Заказ ЧЗ в Текшер завершен.', 'success');
+      } else if (runStatus === 'partial_failed') {
+        setMarkOrderStatus('Заказ ЧЗ завершен с ошибками.', 'error');
+      } else {
+        setMarkOrderStatus('Заказ ЧЗ отменен.', 'error');
+      }
+    }
+  }
+
+  function setOrderRowStatus(size, message, kind) {
+    document.querySelectorAll('tr[data-order-row-size]').forEach((tr) => {
+      if (normalize(tr.dataset.orderRowSize || '') !== normalize(size)) return;
+      const cell = tr.querySelector('[data-order-status]');
+      if (!cell) return;
+      cell.textContent = message || '';
+      cell.title = message || '';
+      cell.classList.toggle('error', kind === 'error');
+    });
+  }
+
+  function setMarkOrderStatus(message, kind) {
+    if (!markOrderStatus) return;
+    markOrderStatus.textContent = message || '';
+    markOrderStatus.className = `order-run-status ${kind || ''}`.trim();
+  }
 
   function requestSaveMapping() {
     if (!hasUnsavedGtin) return;
