@@ -439,12 +439,10 @@ def create_app() -> FastAPI:
         )
         if teksher_status:
             product_card = replace(product_card, api_status=(product_card.api_status + teksher_status).strip())
-        with session_scope() as session:
-            order_run_state = _latest_product_card_order_run_state(session, user_id, product_card.wb_article)
         return templates.TemplateResponse(
             request,
             "product_card.html",
-            _base_context(request, product_card=product_card, order_run_state=order_run_state),
+            _base_context(request, product_card=product_card),
         )
 
     @app.post("/api/product-cards/{wb_article}/gtin-upload")
@@ -860,20 +858,6 @@ def _serialize_run(run: WorkflowRunModel) -> dict:
         "created_at": run.created_at.isoformat() if run.created_at else "",
         "updated_at": run.updated_at.isoformat() if run.updated_at else "",
     }
-
-
-def _latest_product_card_order_run_state(session: Session, user_id: str, wb_article: str) -> dict:
-    if not hasattr(session, "execute"):
-        return {}
-    run = session.execute(
-        select(WorkflowRunModel)
-        .where(WorkflowRunModel.user_id == user_id)
-        .where(WorkflowRunModel.source_url == f"/product-cards/{wb_article}")
-        .order_by(WorkflowRunModel.created_at.desc())
-    ).scalars().first()
-    if run is None:
-        return {}
-    return _serialize_product_card_order_run(run, session)
 
 
 def _product_card_order_history(session: Session, user_id: str, wb_article: str) -> list[dict]:

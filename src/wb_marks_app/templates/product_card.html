@@ -112,16 +112,10 @@
   }
   .order-run-status.error { color: #b42318; }
   .order-run-status.success { color: #3f6212; }
-  .order-history-panel {
-    border-top: 1px solid #dfe3eb;
-    margin-top: 14px;
-    padding-top: 14px;
-  }
   .order-history-panel[hidden] { display: none; }
   .order-history-title {
     align-items: center;
     display: flex;
-    justify-content: space-between;
     margin-bottom: 10px;
   }
   .order-history-title h3 {
@@ -480,44 +474,6 @@
         <button type="button" class="secondary" id="order-history-button">История заказов</button>
       </div>
       <div id="mark-order-status" class="order-run-status" role="status" aria-live="polite"></div>
-      <div id="order-history-panel" class="order-history-panel" hidden>
-        <div class="order-history-title">
-          <h3>История заказов</h3>
-          <span class="muted">Последние операции сверху</span>
-        </div>
-        <div id="order-history-message" class="order-run-status" role="status" aria-live="polite"></div>
-        <div class="table-scroll">
-          <table class="mapping-table order-history-table">
-            <colgroup>
-              <col style="width: 145px;" />
-              <col style="width: 70px;" />
-              <col style="width: 145px;" />
-              <col style="width: 70px;" />
-              <col style="width: 145px;" />
-              <col style="width: 175px;" />
-              <col style="width: 140px;" />
-              <col style="width: 140px;" />
-              <col style="width: 140px;" />
-              <col style="width: 90px;" />
-            </colgroup>
-            <thead>
-              <tr>
-                <th class="template-head">Дата запуска</th>
-                <th class="template-head">Размер</th>
-                <th class="template-head">GTIN</th>
-                <th class="template-head">Кол-во</th>
-                <th class="template-head">Статус</th>
-                <th class="template-head">Документ</th>
-                <th class="template-head">Эмиссия</th>
-                <th class="template-head">Нанесение</th>
-                <th class="template-head">Трансгран</th>
-                <th class="template-head">CSV</th>
-              </tr>
-            </thead>
-            <tbody id="order-history-body"></tbody>
-          </table>
-        </div>
-      </div>
     </div>
 
     <div class="card">
@@ -560,8 +516,45 @@
       </div>
     </div>
   </div>
+
+  <div id="order-history-panel" class="card order-history-panel" hidden>
+    <div class="order-history-title">
+      <h3>История заказов</h3>
+    </div>
+    <div id="order-history-message" class="order-run-status" role="status" aria-live="polite"></div>
+    <div class="table-scroll">
+      <table class="mapping-table order-history-table">
+        <colgroup>
+          <col style="width: 145px;" />
+          <col style="width: 70px;" />
+          <col style="width: 145px;" />
+          <col style="width: 70px;" />
+          <col style="width: 145px;" />
+          <col style="width: 175px;" />
+          <col style="width: 140px;" />
+          <col style="width: 140px;" />
+          <col style="width: 140px;" />
+          <col style="width: 90px;" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th class="template-head">Дата запуска</th>
+            <th class="template-head">Размер</th>
+            <th class="template-head">GTIN</th>
+            <th class="template-head">Кол-во</th>
+            <th class="template-head">Статус</th>
+            <th class="template-head">Документ</th>
+            <th class="template-head">Эмиссия</th>
+            <th class="template-head">Нанесение</th>
+            <th class="template-head">Трансгран</th>
+            <th class="template-head">CSV</th>
+          </tr>
+        </thead>
+        <tbody id="order-history-body"></tbody>
+      </table>
+    </div>
+  </div>
 </div>
-<script type="application/json" id="mark-order-initial-state">{{ order_run_state | default({}) | tojson }}</script>
 <script>
 (() => {
   const page = document.querySelector('.product-page');
@@ -584,7 +577,6 @@
   const draftSave = document.getElementById('draft-preview-save');
   const markOrderButton = document.getElementById('mark-order-button');
   const markOrderStatus = document.getElementById('mark-order-status');
-  const markOrderInitialState = document.getElementById('mark-order-initial-state');
   const orderHistoryButton = document.getElementById('order-history-button');
   const orderHistoryPanel = document.getElementById('order-history-panel');
   const orderHistoryBody = document.getElementById('order-history-body');
@@ -648,7 +640,6 @@
   if (orderHistoryButton) {
     orderHistoryButton.addEventListener('click', () => toggleOrderHistory());
   }
-  hydrateInitialMarkOrderState();
 
   input.addEventListener('change', async () => {
     const file = input.files && input.files[0];
@@ -809,22 +800,6 @@
       hour: '2-digit',
       minute: '2-digit',
     });
-  }
-
-  function hydrateInitialMarkOrderState() {
-    if (!markOrderInitialState || !markOrderInitialState.textContent.trim()) return;
-    try {
-      const payload = JSON.parse(markOrderInitialState.textContent);
-      if (!payload || !payload.run || !payload.run.id) return;
-      currentMarkOrderRunId = payload.run.id;
-      if (markOrderButton && !['completed', 'partial_failed', 'cancelled'].includes(payload.run.status)) {
-        markOrderButton.disabled = true;
-      }
-      applyMarkOrderStatus(payload);
-      scheduleMarkOrderPolling();
-    } catch (error) {
-      return;
-    }
   }
 
   async function startMarkOrder() {
