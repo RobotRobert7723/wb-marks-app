@@ -41,6 +41,7 @@ Logger = Callable[[str], None]
 
 TEKSHER_EXISTING_PRODUCT_MESSAGE = "В Текшер уже есть карточка с этим GTIN, данные НЕ СОХРАНЕНЫ"
 TEKSHER_DEFAULT_GCP_LENGTH = 9
+TEKSHER_POLL_INTERVAL_SECONDS = 7.0
 TEKSHER_KYRGYZSTAN_COUNTRY_ID = 242
 TEKSHER_SIZE_UNIT_INTERNATIONAL = "\u041c\u0415\u0416\u0414\u0423\u041d\u0410\u0420\u041e\u0414\u041d\u042b\u0419"
 TEKSHER_VENDOR_ARTICLE_UNIT = "\u0410\u0440\u0442\u0438\u043a\u0443\u043b"
@@ -1344,7 +1345,7 @@ class TeksherService:
                 ready = self._is_operation_ready(order_id, config)
             except (AppError, requests.RequestException) as exc:
                 self.logger(f"Teksher order {order_id} polling transient error: {exc}")
-                self.sleep(2.0)
+                self.sleep(self._poll_interval_seconds())
                 continue
             self.logger(
                 f"Teksher order {order_id} status={last_status}, ready={ready}, endAt={last_end_at or '-'}"
@@ -1353,7 +1354,7 @@ class TeksherService:
                 return
             if last_status in {"REJECTED", "FAILED"}:
                 raise AppError(f"Teksher order {order_id} finished with status {last_status}")
-            self.sleep(2.0)
+            self.sleep(self._poll_interval_seconds())
 
         raise AppError(f"Teksher order {order_id} did not become ready within {timeout_seconds} seconds.")
 
@@ -1368,14 +1369,14 @@ class TeksherService:
                 last_status = str(details.get("status") or "unknown")
             except (AppError, requests.RequestException) as exc:
                 self.logger(f"Teksher operation {operation_id} polling transient error: {exc}")
-                self.sleep(2.0)
+                self.sleep(self._poll_interval_seconds())
                 continue
             self.logger(f"Teksher operation {operation_id} status={last_status}")
             if last_status == expected_status:
                 return
             if last_status in {"REJECTED", "FAILED"}:
                 raise AppError(f"Teksher operation {operation_id} finished with status {last_status}")
-            self.sleep(2.0)
+            self.sleep(self._poll_interval_seconds())
 
         raise AppError(
             f"Teksher operation {operation_id} did not reach status {expected_status} "
@@ -1416,7 +1417,7 @@ class TeksherService:
             except requests.HTTPError as exc:
                 status = exc.response.status_code if exc.response is not None else "unknown"
                 last_error = f"HTTP {status}"
-            self.sleep(2.0)
+            self.sleep(self._poll_interval_seconds())
 
         raise AppError(
             f"Teksher marking CSV for operation {operation_id} was not available within "
@@ -1535,13 +1536,13 @@ class TeksherService:
                 payload = self._get_unread_notifications(config)
             except (AppError, requests.RequestException) as exc:
                 self.logger(f"Teksher unread notifications polling transient error: {exc}")
-                self.sleep(2.0)
+                self.sleep(self._poll_interval_seconds())
                 continue
             last_payload = payload
             self.logger(f"Teksher unread notifications payload={payload}")
             if payload.get("status") == "200" and bool(payload.get("data")):
                 return
-            self.sleep(2.0)
+            self.sleep(self._poll_interval_seconds())
 
         raise AppError(
             "Teksher unread notifications endpoint did not return a successful result "
@@ -1558,7 +1559,7 @@ class TeksherService:
                 details = self._get_operation(operation_id, config)
             except (AppError, requests.RequestException) as exc:
                 self.logger(f"Teksher operation {operation_id} registration transient error: {exc}")
-                self.sleep(2.0)
+                self.sleep(self._poll_interval_seconds())
                 continue
             last_details = details
             status = str(details.get("status") or "unknown")
@@ -1571,7 +1572,7 @@ class TeksherService:
                 return details
             if status in {"REJECTED", "FAILED"}:
                 raise AppError(f"Teksher operation {operation_id} finished with status {status}")
-            self.sleep(2.0)
+            self.sleep(self._poll_interval_seconds())
 
         raise AppError(
             "Teksher transgran operation was not registered successfully "
@@ -1604,6 +1605,9 @@ class TeksherService:
         )
         self._raise_for_status(response)
         return self._json(response)
+
+    def _poll_interval_seconds(self) -> float:
+        return TEKSHER_POLL_INTERVAL_SECONDS
 
     def _headers(
         self,

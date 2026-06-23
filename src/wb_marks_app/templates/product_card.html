@@ -685,7 +685,7 @@
   function scheduleMarkOrderPolling() {
     if (markOrderPollTimer) clearInterval(markOrderPollTimer);
     if (!currentMarkOrderRunId) return;
-    markOrderPollTimer = setInterval(() => pollMarkOrderStatus(), 30000);
+    markOrderPollTimer = setInterval(() => pollMarkOrderStatus(), 7000);
   }
 
   async function pollMarkOrderStatus() {
