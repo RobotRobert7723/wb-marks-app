@@ -18,6 +18,7 @@ dependencies = [
   "python-multipart>=0.0.20",
   "requests>=2.32",
   "openpyxl>=3.1",
+  "reportlab>=4.4",
 ]
 
 [project.optional-dependencies]
@@ -37,4 +38,4 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-wb_marks_app = ["templates/*.html", "static/vendor/*"]
+wb_marks_app = ["templates/*.html", "static/vendor/*", "static/label_assets/*"]

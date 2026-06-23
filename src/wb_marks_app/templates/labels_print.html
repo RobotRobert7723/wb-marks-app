@@ -258,6 +258,7 @@
     <div class="toolbar">
       <a href="/labels">Этикетки</a>
       <button type="button" onclick="window.print()">Печать</button>
+      {% if pdf_url %}<a href="{{ pdf_url }}">PDF 58x40</a>{% endif %}
       {% if message %}<span class="message">{{ message }}</span>{% endif %}
       <span class="meta">60x40 · {{ labels|length }}</span>
     </div>

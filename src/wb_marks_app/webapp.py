@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
+import uuid
 from dataclasses import replace
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
@@ -40,6 +42,7 @@ from wb_marks_app.server_settings import (
 )
 from wb_marks_app.services.browser import BrowserSessionManager
 from wb_marks_app.services.gtin_excel import GtinExcelParser
+from wb_marks_app.services.label_pdf import LabelPdfError, render_labels_pdf
 from wb_marks_app.services.labels import build_manual_labels, labels_to_dicts, make_label_record
 from wb_marks_app.services.product_cards import ProductCardTemplateService
 from wb_marks_app.services.server_workflow import LaunchRequest, WorkflowRunService
@@ -54,6 +57,7 @@ product_card_service = ProductCardTemplateService()
 gtin_excel_parser = GtinExcelParser()
 teksher_mapping_service = TeksherMappingService()
 teksher_product_service = TeksherService(BrowserSessionManager(Path.cwd() / ".teksher-product-cards"))
+_LABEL_PDF_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 
 
 def _raw_settings_dict(settings: AppSettingsModel) -> dict[str, str]:
@@ -356,37 +360,12 @@ def create_app() -> FastAPI:
             )
 
     @app.get("/runs/{run_id}/labels", response_class=HTMLResponse)
-    def run_labels_page(request: Request, run_id: str, template: str = "combined"):
+    def run_labels_page(request: Request, run_id: str, template: str = "srad"):
         user_id = _user_id_from_session(request)
         if not user_id:
             return RedirectResponse(url="/login", status_code=303)
         with session_scope() as session:
-            run = _get_user_run(session, run_id, user_id)
-            items = session.execute(
-                select(WorkflowRunItemModel)
-                .where(WorkflowRunItemModel.run_id == run_id)
-                .order_by(WorkflowRunItemModel.vendor_code, WorkflowRunItemModel.size)
-            ).scalars().all()
-            labels = []
-            for item in items:
-                marks = session.execute(
-                    select(MarkCodeModel)
-                    .where(MarkCodeModel.run_item_id == item.id)
-                    .order_by(MarkCodeModel.position)
-                ).scalars().all()
-                for mark in marks:
-                    labels.append(
-                        make_label_record(
-                            template=template,
-                            item_name=item.wb_item_name,
-                            vendor_code=item.vendor_code,
-                            size=item.size,
-                            wb_barcode=item.barcode,
-                            mark_code=mark.mark_code,
-                            index=mark.position,
-                            total=item.quantity,
-                        )
-                    )
+            run, labels = _build_run_labels(session, run_id, user_id, template)
             return templates.TemplateResponse(
                 request,
                 "labels_print.html",
@@ -395,9 +374,30 @@ def create_app() -> FastAPI:
                     title=f"Labels for WB draft {run.draft_id}",
                     labels=labels_to_dicts(labels),
                     label_type=template,
+                    pdf_url=f"/runs/{run_id}/labels.pdf?template={template}",
                     message="" if labels else "В этом запуске пока нет сохраненных кодов ЧЗ.",
                 ),
             )
+
+    @app.get("/runs/{run_id}/labels.pdf")
+    def run_labels_pdf(request: Request, run_id: str, template: str = "srad"):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return RedirectResponse(url="/login", status_code=303)
+        with session_scope() as session:
+            run, labels = _build_run_labels(session, run_id, user_id, template)
+        if not labels:
+            raise HTTPException(status_code=404, detail="No labels to print")
+        try:
+            pdf = render_labels_pdf(labels, template=template)
+        except LabelPdfError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        filename = f"wb_labels_{run.draft_id}_58x40.pdf"
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        )
 
     @app.get("/labels", response_class=HTMLResponse)
     def labels_page(request: Request):
@@ -628,7 +628,7 @@ def create_app() -> FastAPI:
     @app.post("/labels/preview", response_class=HTMLResponse)
     def labels_preview_page(
         request: Request,
-        template: str = Form("combined"),
+        template: str = Form("srad"),
         item_name: str = Form(""),
         vendor_code: str = Form(""),
         size: str = Form(""),
@@ -639,6 +639,11 @@ def create_app() -> FastAPI:
         unit_count: str = Form("1"),
         copies: int = Form(1),
         note_text: str = Form(""),
+        supplier_name: str = Form(""),
+        production_date: str = Form(""),
+        country_of_origin: str = Form(""),
+        brand: str = Form(""),
+        supplier_address: str = Form(""),
     ):
         if not _user_id_from_session(request):
             return RedirectResponse(url="/login", status_code=303)
@@ -654,6 +659,11 @@ def create_app() -> FastAPI:
             unit_count=unit_count,
             copies=copies,
             note_text=note_text,
+            supplier_name=supplier_name,
+            production_date=production_date,
+            country_of_origin=country_of_origin,
+            brand=brand,
+            supplier_address=supplier_address,
         )
         if not labels:
             return templates.TemplateResponse(
@@ -662,19 +672,24 @@ def create_app() -> FastAPI:
                 _base_context(
                     request,
                     message="Нет данных для печати.",
-                    form={
-                        "template": template,
-                        "item_name": item_name,
-                        "vendor_code": vendor_code,
-                        "size": size,
-                        "color": color,
-                        "composition": composition,
-                        "wb_barcode": wb_barcode,
-                        "mark_codes": mark_codes,
-                        "unit_count": unit_count,
-                        "copies": copies,
-                        "note_text": note_text,
-                    },
+                    form=_label_form_from_inputs(
+                        template=template,
+                        item_name=item_name,
+                        vendor_code=vendor_code,
+                        size=size,
+                        color=color,
+                        composition=composition,
+                        wb_barcode=wb_barcode,
+                        mark_codes=mark_codes,
+                        unit_count=unit_count,
+                        copies=copies,
+                        note_text=note_text,
+                        supplier_name=supplier_name,
+                        production_date=production_date,
+                        country_of_origin=country_of_origin,
+                        brand=brand,
+                        supplier_address=supplier_address,
+                    ),
                 ),
             )
         return templates.TemplateResponse(
@@ -685,8 +700,173 @@ def create_app() -> FastAPI:
                 title="Этикетки 60x40",
                 labels=labels_to_dicts(labels),
                 label_type=template,
+                pdf_url="",
                 message="",
             ),
+        )
+
+    @app.post("/labels/pdf")
+    def labels_pdf_page(
+        request: Request,
+        template: str = Form("srad"),
+        item_name: str = Form(""),
+        vendor_code: str = Form(""),
+        size: str = Form(""),
+        color: str = Form(""),
+        composition: str = Form(""),
+        wb_barcode: str = Form(""),
+        mark_codes: str = Form(""),
+        unit_count: str = Form("1"),
+        copies: int = Form(1),
+        note_text: str = Form(""),
+        supplier_name: str = Form(""),
+        production_date: str = Form(""),
+        country_of_origin: str = Form(""),
+        brand: str = Form(""),
+        supplier_address: str = Form(""),
+    ):
+        if not _user_id_from_session(request):
+            return RedirectResponse(url="/login", status_code=303)
+        labels = build_manual_labels(
+            template=template,
+            item_name=item_name,
+            vendor_code=vendor_code,
+            size=size,
+            color=color,
+            composition=composition,
+            wb_barcode=wb_barcode,
+            mark_codes_text=mark_codes,
+            unit_count=unit_count,
+            copies=copies,
+            note_text=note_text,
+            supplier_name=supplier_name,
+            production_date=production_date,
+            country_of_origin=country_of_origin,
+            brand=brand,
+            supplier_address=supplier_address,
+        )
+        try:
+            pdf = render_labels_pdf(labels, template=template)
+        except (LabelPdfError, ValueError) as exc:
+            return templates.TemplateResponse(
+                request,
+                "labels.html",
+                _base_context(
+                    request,
+                    message=str(exc),
+                    form=_label_form_from_inputs(
+                        template=template,
+                        item_name=item_name,
+                        vendor_code=vendor_code,
+                        size=size,
+                        color=color,
+                        composition=composition,
+                        wb_barcode=wb_barcode,
+                        mark_codes=mark_codes,
+                        unit_count=unit_count,
+                        copies=copies,
+                        note_text=note_text,
+                        supplier_name=supplier_name,
+                        production_date=production_date,
+                        country_of_origin=country_of_origin,
+                        brand=brand,
+                        supplier_address=supplier_address,
+                    ),
+                ),
+                status_code=400,
+            )
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={"Content-Disposition": 'inline; filename="labels_58x40.pdf"'},
+        )
+
+    @app.post("/api/labels/pdf")
+    async def create_label_pdf_api(request: Request):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="JSON body is required") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="JSON body must be an object")
+
+        template = _payload_text(payload, "template", "template_name", "название_шаблона", "Название шаблона") or "srad"
+        mark_codes = _payload_mark_codes(payload)
+        if _template_requires_mark_codes(template) and not mark_codes:
+            raise HTTPException(status_code=400, detail="mark_codes must contain at least one ЧЗ code")
+
+        labels = build_manual_labels(
+            template=template,
+            item_name=_payload_text(payload, "item_name", "name", "наименование", "Наименование"),
+            vendor_code=_payload_text(payload, "vendor_code", "article", "артикул", "Артикул"),
+            size=_payload_text(payload, "size", "размер", "Размер"),
+            color=_payload_text(payload, "color", "цвет", "Цвет"),
+            composition=_payload_text(payload, "composition", "состав", "Состав"),
+            wb_barcode=_payload_text(payload, "wb_barcode", "WB barcode", "wb barcode"),
+            mark_codes_text="\n".join(mark_codes),
+            unit_count="1",
+            copies=max(len(mark_codes), 1),
+            note_text=_payload_text(payload, "note_text", "completeness", "комплектность", "Комплектность"),
+            supplier_name=_payload_text(payload, "supplier_name", "supplier", "поставщик", "Поставщик"),
+            production_date=_payload_text(
+                payload,
+                "production_date",
+                "manufacture_date",
+                "дата_производства",
+                "Дата производства",
+            ),
+            country_of_origin=_payload_text(
+                payload,
+                "country_of_origin",
+                "country",
+                "страна_производства",
+                "Страна производства",
+            ),
+            brand=_payload_text(payload, "brand", "бренд", "Бренд"),
+            supplier_address=_payload_text(
+                payload,
+                "supplier_address",
+                "address",
+                "адрес_поставщика",
+                "Адрес поставщика",
+            ),
+        )
+        try:
+            pdf = render_labels_pdf(labels, template=template)
+        except (LabelPdfError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        file_id = uuid.uuid4().hex
+        file_path = _label_pdf_file_path(user_id, file_id)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_bytes(pdf)
+        download_url = str(request.url_for("download_label_pdf_api", file_id=file_id))
+        return {
+            "ok": True,
+            "template": labels[0].template if labels else template,
+            "download_url": download_url,
+            "file_name": f"labels_{file_id[:8]}_58x40.pdf",
+            "labels_count": len(labels),
+            "pages_count": _pdf_page_count(pdf),
+        }
+
+    @app.get("/api/labels/pdf/{file_id}", name="download_label_pdf_api")
+    def download_label_pdf_api(request: Request, file_id: str):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        if not _LABEL_PDF_ID_RE.fullmatch(file_id):
+            raise HTTPException(status_code=404, detail="PDF not found")
+        file_path = _label_pdf_file_path(user_id, file_id)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="PDF not found")
+        return FileResponse(
+            path=file_path,
+            filename=f"labels_{file_id[:8]}_58x40.pdf",
+            media_type="application/pdf",
         )
 
     @app.post("/runs/{run_id}/resume")
@@ -1029,19 +1209,105 @@ def _settings_incomplete(settings: AppSettingsModel) -> bool:
 
 
 def _default_label_form() -> dict:
+    return _label_form_from_inputs()
+
+
+def _label_form_from_inputs(
+    *,
+    template: str = "srad",
+    item_name: str = "",
+    vendor_code: str = "",
+    size: str = "",
+    color: str = "",
+    composition: str = "",
+    wb_barcode: str = "",
+    mark_codes: str = "",
+    unit_count: str = "1",
+    copies: int = 1,
+    note_text: str = "",
+    supplier_name: str = "",
+    production_date: str = "",
+    country_of_origin: str = "",
+    brand: str = "",
+    supplier_address: str = "",
+) -> dict:
     return {
-        "template": "combined",
-        "item_name": "",
-        "vendor_code": "",
-        "size": "",
-        "color": "",
-        "composition": "",
-        "wb_barcode": "",
-        "mark_codes": "",
-        "unit_count": "1",
-        "copies": 1,
-        "note_text": "",
+        "template": template,
+        "item_name": item_name,
+        "vendor_code": vendor_code,
+        "size": size,
+        "color": color,
+        "composition": composition,
+        "wb_barcode": wb_barcode,
+        "mark_codes": mark_codes,
+        "unit_count": unit_count,
+        "copies": copies,
+        "note_text": note_text,
+        "supplier_name": supplier_name,
+        "production_date": production_date,
+        "country_of_origin": country_of_origin,
+        "brand": brand,
+        "supplier_address": supplier_address,
     }
+
+
+def _payload_value(payload: dict, *keys: str):
+    for key in keys:
+        if key in payload:
+            return payload[key]
+    casefolded = {str(key).casefold(): value for key, value in payload.items()}
+    for key in keys:
+        value = casefolded.get(key.casefold())
+        if value is not None:
+            return value
+    return None
+
+
+def _payload_text(payload: dict, *keys: str) -> str:
+    value = _payload_value(payload, *keys)
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return "\n".join(str(item).strip() for item in value if item is not None).strip()
+    return str(value).strip()
+
+
+def _payload_mark_codes(payload: dict) -> list[str]:
+    value = _payload_value(payload, "mark_codes", "codes", "chz_codes", "коды_чз", "Коды ЧЗ")
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    return [line.strip() for line in str(value).replace("\r\n", "\n").replace("\r", "\n").split("\n") if line.strip()]
+
+
+def _template_requires_mark_codes(template: str) -> bool:
+    return str(template or "").strip().lower() in {
+        "srad",
+        "combined",
+        "58x40_full",
+        "wb_chz_58x40",
+        "simple",
+        "58x40_simple",
+        "medium",
+        "58x40_medium",
+        "chz",
+        "58x40_chz",
+    }
+
+
+def _label_pdf_file_path(user_id: str, file_id: str) -> Path:
+    root = load_config().resolved_artifact_storage_dir() / "label-pdfs" / _safe_path_token(user_id)
+    return root / f"{file_id}.pdf"
+
+
+def _safe_path_token(value: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "").strip())
+    return token or "user"
+
+
+def _pdf_page_count(pdf: bytes) -> int:
+    return pdf.count(b"/Type /Page") - pdf.count(b"/Type /Pages")
 
 
 def _is_excel_file(filename: str) -> bool:
@@ -1097,3 +1363,38 @@ def _get_user_run(session: Session, run_id: str, user_id: str) -> WorkflowRunMod
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return run
+
+
+def _build_run_labels(
+    session: Session,
+    run_id: str,
+    user_id: str,
+    template: str,
+) -> tuple[WorkflowRunModel, list]:
+    run = _get_user_run(session, run_id, user_id)
+    items = session.execute(
+        select(WorkflowRunItemModel)
+        .where(WorkflowRunItemModel.run_id == run_id)
+        .order_by(WorkflowRunItemModel.vendor_code, WorkflowRunItemModel.size)
+    ).scalars().all()
+    labels = []
+    for item in items:
+        marks = session.execute(
+            select(MarkCodeModel)
+            .where(MarkCodeModel.run_item_id == item.id)
+            .order_by(MarkCodeModel.position)
+        ).scalars().all()
+        for mark in marks:
+            labels.append(
+                make_label_record(
+                    template=template,
+                    item_name=item.wb_item_name,
+                    vendor_code=item.vendor_code,
+                    size=item.size,
+                    wb_barcode=item.barcode,
+                    mark_code=mark.mark_code,
+                    index=mark.position,
+                    total=item.quantity,
+                )
+            )
+    return run, labels

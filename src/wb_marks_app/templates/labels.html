@@ -1,63 +1,109 @@
 {% extends "layout.html" %}
 {% block content %}
-<div class="card">
-  <h1>Этикетки 60x40</h1>
+<style>
+  .label-template-page {
+    max-width: 1280px;
+    margin: 0 auto;
+  }
+  .label-template-page h1 {
+    margin-bottom: 24px;
+  }
+  .template-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(220px, 1fr));
+    gap: 42px;
+    align-items: start;
+  }
+  .template-option {
+    display: grid;
+    gap: 18px;
+    align-content: start;
+    cursor: pointer;
+  }
+  .template-option input {
+    width: 30px;
+    height: 30px;
+    margin: 0;
+    accent-color: #111;
+    cursor: pointer;
+  }
+  .template-heading {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-height: 40px;
+  }
+  .template-name {
+    font-size: 28px;
+    line-height: 34px;
+  }
+  .template-preview {
+    display: block;
+    width: 100%;
+    max-width: 320px;
+    height: auto;
+  }
+  @media (max-width: 980px) {
+    .template-grid {
+      grid-template-columns: repeat(2, minmax(220px, 1fr));
+    }
+  }
+  @media (max-width: 620px) {
+    .template-grid {
+      grid-template-columns: 1fr;
+      gap: 30px;
+    }
+    .template-name {
+      font-size: 24px;
+      line-height: 30px;
+    }
+  }
+</style>
+
+<div class="label-template-page">
+  <h1>Этикетки</h1>
   {% if message %}<p class="error">{{ message }}</p>{% endif %}
-  <form method="post" action="/labels/preview">
-    <div class="grid">
-      <div>
-        <label for="template">Шаблон</label>
-        <select id="template" name="template">
-          <option value="combined" {% if form.template == "combined" %}selected{% endif %}>WB + ЧЗ</option>
-          <option value="wb" {% if form.template == "wb" %}selected{% endif %}>WB</option>
-          <option value="chz" {% if form.template == "chz" %}selected{% endif %}>ЧЗ</option>
-          <option value="note" {% if form.template == "note" %}selected{% endif %}>Комплектность</option>
-        </select>
-      </div>
-      <div>
-        <label for="item_name">Наименование</label>
-        <input id="item_name" name="item_name" value="{{ form.item_name }}" />
-      </div>
-      <div>
-        <label for="wb_barcode">WB barcode</label>
-        <input id="wb_barcode" name="wb_barcode" value="{{ form.wb_barcode }}" />
-      </div>
-      <div>
-        <label for="unit_count">Количество на этикетке</label>
-        <input id="unit_count" name="unit_count" value="{{ form.unit_count }}" />
-      </div>
-      <div>
-        <label for="vendor_code">Артикул</label>
-        <input id="vendor_code" name="vendor_code" value="{{ form.vendor_code }}" />
-      </div>
-      <div>
-        <label for="size">Размер</label>
-        <input id="size" name="size" value="{{ form.size }}" />
-      </div>
-      <div>
-        <label for="color">Цвет</label>
-        <input id="color" name="color" value="{{ form.color }}" />
-      </div>
-      <div>
-        <label for="composition">Состав</label>
-        <input id="composition" name="composition" value="{{ form.composition }}" />
-      </div>
-      <div>
-        <label for="copies">Копий без ЧЗ</label>
-        <input id="copies" name="copies" type="number" min="1" value="{{ form.copies }}" />
-      </div>
-    </div>
-    <p>
-      <label for="mark_codes">Коды ЧЗ</label>
-      <textarea id="mark_codes" name="mark_codes" spellcheck="false">{{ form.mark_codes }}</textarea>
-    </p>
-    <p>
-      <label for="note_text">Комплектность</label>
-      <textarea id="note_text" name="note_text">{{ form.note_text }}</textarea>
-    </p>
-    <div class="actions">
-      <button type="submit">Предпросмотр</button>
-    </div>
-  </form>
+  <div class="template-grid" role="list">
+    <label class="template-option" role="listitem">
+      <span class="template-heading">
+        <input type="checkbox" name="template" value="srad" checked aria-label="SRad" />
+        <span class="template-name">SRad</span>
+      </span>
+      <img class="template-preview" src="/static/label_assets/template_srad.png" alt="SRad" />
+    </label>
+    <label class="template-option" role="listitem">
+      <span class="template-heading">
+        <input type="checkbox" name="template" value="simple" aria-label="Simple" />
+        <span class="template-name">Simple</span>
+      </span>
+      <img class="template-preview" src="/static/label_assets/template_simple.png" alt="Simple" />
+    </label>
+    <label class="template-option" role="listitem">
+      <span class="template-heading">
+        <input type="checkbox" name="template" value="medium" aria-label="Medium" />
+        <span class="template-name">Medium</span>
+      </span>
+      <img class="template-preview" src="/static/label_assets/template_medium.png" alt="Medium" />
+    </label>
+  </div>
 </div>
+
+<script>
+  const templateInputs = Array.from(document.querySelectorAll('input[name="template"]'));
+  const storedTemplate = localStorage.getItem("labelTemplate");
+  const initialInput = templateInputs.find((input) => input.value === storedTemplate);
+  if (initialInput) {
+    templateInputs.forEach((input) => { input.checked = input === initialInput; });
+  }
+  templateInputs.forEach((input) => {
+    input.addEventListener("change", () => {
+      if (!input.checked) {
+        input.checked = true;
+        return;
+      }
+      templateInputs.forEach((other) => { if (other !== input) other.checked = false; });
+      localStorage.setItem("labelTemplate", input.value);
+    });
+  });
+</script>
 {% endblock %}

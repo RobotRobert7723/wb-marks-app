@@ -1,15 +1,19 @@
 Metadata-Version: 2.4
 Name: wb-marks-app
-Version: 0.1.0
+Version: 1.0.0
 Summary: Server-side workflow for WB draft supplies, Honest Signs CSV, and Teksher transgran orchestration.
 Requires-Python: >=3.12
 Description-Content-Type: text/markdown
 Requires-Dist: fastapi>=0.116
 Requires-Dist: uvicorn>=0.35
 Requires-Dist: sqlalchemy>=2.0
+Requires-Dist: psycopg[binary]>=3.2
 Requires-Dist: jinja2>=3.1
+Requires-Dist: itsdangerous>=2.2
 Requires-Dist: python-multipart>=0.0.20
 Requires-Dist: requests>=2.32
+Requires-Dist: openpyxl>=3.1
+Requires-Dist: reportlab>=4.4
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0; extra == "dev"
 Provides-Extra: legacy-desktop
@@ -18,89 +22,177 @@ Requires-Dist: playwright>=1.52; extra == "legacy-desktop"
 
 # WB Marks App
 
-Windows desktop application for:
+Server-side v1 for:
 
-- loading the latest WB draft supply,
-- mapping `barcode -> gtin`,
-- issuing Honest Signs on `label.teksher.kg`,
-- exporting CSV with issued marks,
-- preparing the `wbarcode.ru` label-generation step.
+- loading a WB draft supply by `preorderID`,
+- resolving GTIN mapping,
+- issuing Honest Signs through `label.teksher.kg` API,
+- waiting for marking completion,
+- saving CSV artifacts,
+- creating `transgran` operations,
+- storing runs, operations, marks, and artifacts in PostgreSQL-compatible storage.
 
-## Run
+## Architecture
+
+- `FastAPI` backend with server-rendered web GUI
+- `SQLAlchemy` persistence layer
+- `Chrome` extension that injects the `ВыпуститьЧЗ` button into `seller.wildberries.ru`
+- `WB API` for draft retrieval
+- `Teksher API` for auth, emission, marking, CSV, and transgran
+
+`wbarcode.ru` is intentionally not included in v1.
+
+## Run locally
 
 ```powershell
 python -m pip install -e .
-playwright install chromium
+$env:DATABASE_URL = "sqlite:///./wb_marks_app.db"
+$env:APP_BASE_URL = "http://localhost:8000"
 python -m wb_marks_app
 ```
 
-## Teksher API flow
+Open:
 
-You can run the full API flow without UI clicks. The script can either use a ready `Bearer` token or fetch a fresh one through `oauth/login`.
+- [http://localhost:8000/settings](http://localhost:8000/settings)
+- [http://localhost:8000/runs](http://localhost:8000/runs)
+- [http://localhost:8000/labels](http://localhost:8000/labels)
 
-```powershell
-$env:PYTHONPATH = "src"
-python -m wb_marks_app.teksher_api_cli `
-  issue `
-  --gtin 04700063257354 `
-  --quantity 1 `
-  --username "user02562" `
-  --password "<TEKSHER_PASSWORD>"
+## Label printing
+
+The web UI can print 60x40 mm labels from:
+
+- saved WB workflow runs: open a run and click `Печать этикеток`;
+- template selection: open `/labels` to choose one of the preset label templates.
+
+The label renderer preserves the GS separator (`ASCII 29`, `\x1d`) inside ЧЗ codes and renders:
+
+- WB barcode as Code128;
+- ЧЗ payload as Data Matrix with an initial FNC1 marker.
+
+The server-side PDF renderer uses preset 58x40 mm templates, keeps a 3 mm empty margin on each side, prints the `SRad` template as a four-label set per ЧЗ code, validates GS1/ЧЗ payloads before rendering Data Matrix, and validates WB barcodes before rendering Code128. `Simple` renders a two-label set, and `Medium` renders a three-label set. Docker installs Node.js for the bundled `bwip-js` barcode renderer and DejaVu fonts for Cyrillic PDF text.
+
+The same renderer is available through the authenticated JSON API:
+
+```http
+POST /api/labels/pdf
+Content-Type: application/json
 ```
 
-The script will:
-
-- create the mark code order,
-- wait until the order becomes `ACCEPTED` and `ready=true`,
-- create the marking operation,
-- download the CSV with marking codes.
-
-To create a transgran operation from a saved CSV:
-
-```powershell
-$env:PYTHONPATH = "src"
-python -m wb_marks_app.teksher_api_cli `
-  transgran `
-  --csv "C:\Users\1\Documents\chrome\output\teksher_04700063257354.csv" `
-  --gtin 04700063257354 `
-  --document-number "123" `
-  --document-date "2026-04-24T19:31:39" `
-  --shipment-date "2026-04-24T19:31:41" `
-  --recipient-name "ООО \"РВБ\"" `
-  --recipient-inn "9714053621" `
-  --recipient-kpp "507401001" `
-  --username "user02562" `
-  --password "<TEKSHER_PASSWORD>"
+```json
+{
+  "template": "SRad",
+  "item_name": "Спортивный костюм",
+  "wb_barcode": "2049271462634",
+  "vendor_code": "cv_nk_blue_smr",
+  "size": "38",
+  "color": "голубой",
+  "composition": "Хлопок 50%; Поликорбонат 50%",
+  "supplier_name": "ОсОО \"ЭмирЛайн\"",
+  "production_date": "01.06.2026",
+  "country_of_origin": "Кыргызстан",
+  "note_text": "Худи-1шт, Брюки-1шт",
+  "supplier_address": "КР, г.Бишкек, ул. Пыльная и грязная, д. 35",
+  "mark_codes": ["010..."]
+}
 ```
 
-To run the whole chain in one command:
+The response contains a `download_url` for the generated PDF.
+
+Full API field mapping, examples, response schema, and validation errors are documented in
+[docs/labels_api.md](docs/labels_api.md).
+
+## Docker
 
 ```powershell
-$env:PYTHONPATH = "src"
-python -m wb_marks_app.teksher_api_cli `
-  full `
-  --gtin 04700063257354 `
-  --quantity 1 `
-  --document-number "123" `
-  --document-date "2026-04-24T19:31:39" `
-  --shipment-date "2026-04-24T19:31:41" `
-  --recipient-name "ООО \"РВБ\"" `
-  --recipient-inn "9714053621" `
-  --recipient-kpp "507401001" `
-  --username "user02562" `
-  --password "<TEKSHER_PASSWORD>"
+docker build -t wb-marks-app .
+docker run --rm -p 8000:8000 `
+  -e DATABASE_URL="postgresql+psycopg://user:pass@host:5432/dbname" `
+  -e APP_BASE_URL="http://your-vps:8000" `
+  wb-marks-app
 ```
 
-## Current status
+## Settings model
 
-This repository contains a production-oriented v1 skeleton:
+The app stores operational settings in the database:
 
-- desktop GUI with saved settings,
-- workflow orchestration and logging,
-- CSV mapping validation,
-- result CSV generation,
-- WB/API/browser service abstractions,
-- Playwright-backed browser session management,
-- manual-step handling for unstable or undocumented site flows.
+- `wb_api_token`
+- `wb_api_base_url`
+- `teksher_username`
+- `teksher_password`
+- `teksher_transgran_recipient_name`
+- `teksher_transgran_recipient_inn`
+- `teksher_transgran_recipient_kpp`
+- `mapping_mode`
+- `mapping_payload`
+- `artifact_storage_dir`
+- `transgran_document_number_prefix`
+- `step_timeout_seconds`
 
-Site-specific automation for WB seller cabinet, `label.teksher.kg`, and `wbarcode.ru` is intentionally implemented as a safe baseline with extension points. Real selectors, API contracts, and the exact Wbarcode click-path still need to be filled in for your environment.
+### Mapping JSON
+
+The settings page accepts JSON with any of these keys:
+
+```json
+{
+  "size_to_gtin": {
+    "S": "04700063257354",
+    "M": "04700063257361"
+  },
+  "vendor_size_to_gtin": {
+    "nbf_black_z:S": "04700063257354"
+  },
+  "barcode_to_gtin": {
+    "2043467498261": "04700063257354"
+  }
+}
+```
+
+Resolution order:
+
+1. `barcode_to_gtin`
+2. `vendor_size_to_gtin`
+3. `size_to_gtin`
+
+## REST API
+
+- `POST /api/launches`
+- `GET /api/launches/{id}`
+- `GET /api/launches/{id}/items`
+- `GET /api/settings`
+- `PUT /api/settings`
+- `POST /api/settings/validate`
+- `POST /api/labels/pdf`
+- `GET /api/labels/pdf/{file_id}`
+- `GET /api/artifacts/{artifact_id}`
+- `GET /health`
+- `GET /ready`
+
+Launch payload:
+
+```json
+{
+  "draft_id": "50680482",
+  "source_url": "https://seller.wildberries.ru/..."
+}
+```
+
+## Chrome extension
+
+The extension files live in [C:\Users\1\Documents\chrome\extension](C:\Users\1\Documents\chrome\extension).
+
+Load it as an unpacked extension in Chrome:
+
+1. Open `chrome://extensions`
+2. Enable developer mode
+3. Click `Load unpacked`
+4. Choose `C:\Users\1\Documents\chrome\extension`
+5. Open extension options and set the backend URL
+
+The content script injects the `ВыпуститьЧЗ` button on WB pages, tries to detect the current draft id, then asks the backend to create or resume the corresponding run.
+
+## Tests
+
+```powershell
+$env:PYTHONPATH = "C:\Users\1\Documents\chrome\src"
+python -m unittest discover -s tests -v
+```

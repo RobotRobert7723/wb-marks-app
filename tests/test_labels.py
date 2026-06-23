@@ -1,6 +1,13 @@
 import unittest
 
-from wb_marks_app.services.labels import GS, build_manual_labels, extract_mark_codes, parse_mark_code
+from wb_marks_app.services.labels import (
+    GS,
+    build_manual_labels,
+    extract_mark_codes,
+    parse_mark_code,
+    validate_mark_code_for_datamatrix,
+    validate_wb_barcode_for_code128,
+)
 
 
 class LabelServiceTests(unittest.TestCase):
@@ -33,7 +40,7 @@ class LabelServiceTests(unittest.TestCase):
         text = "0104700092263449215/ExwqH/2ziur\\x1d91EE12\\x1d923rhVzA0Rg7nIB\n"
 
         labels = build_manual_labels(
-            template="combined",
+            template="srad",
             item_name="Suit",
             vendor_code="nbf_gray_z",
             size="S",
@@ -42,9 +49,30 @@ class LabelServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(1, len(labels))
-        self.assertEqual("combined", labels[0].template)
+        self.assertEqual("srad", labels[0].template)
         self.assertEqual("04700092263449", labels[0].gtin)
         self.assertEqual("2043467523239", labels[0].wb_barcode)
+
+        legacy_labels = build_manual_labels(
+            template="combined",
+            item_name="Suit",
+            mark_codes_text=text,
+        )
+        self.assertEqual("srad", legacy_labels[0].template)
+
+    def test_parse_mark_code_rejects_invalid_gtin_check_digit(self) -> None:
+        parsed = parse_mark_code("0104700092263448215l(fu2P(Il>rT")
+
+        self.assertFalse(parsed.valid)
+        self.assertEqual("AI 01 GTIN check digit is invalid", parsed.error)
+
+    def test_validate_mark_code_for_datamatrix_requires_verification_fields(self) -> None:
+        with self.assertRaisesRegex(ValueError, "AI 91/92 or AI 93"):
+            validate_mark_code_for_datamatrix("0104700092263449215l(fu2P(Il>rT")
+
+    def test_validate_wb_barcode_for_code128_rejects_control_characters(self) -> None:
+        with self.assertRaisesRegex(ValueError, "printable ASCII"):
+            validate_wb_barcode_for_code128("204346\n7523239")
 
 
 if __name__ == "__main__":
