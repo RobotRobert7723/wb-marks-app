@@ -2,9 +2,9 @@
 {% block content %}
 <style>
   main { padding: 18px; }
-  main > .product-page > .card { margin-bottom: 16px; padding: 16px; }
-  .product-page { display: grid; gap: 16px; }
-  .product-card-header { display: grid; gap: 18px; grid-template-columns: 200px minmax(300px, 1fr); align-items: start; }
+  main > .product-page > .card { margin-bottom: 16px; min-width: 0; padding: 16px; }
+  .product-page { display: grid; gap: 16px; min-width: 0; }
+  .product-card-header { display: grid; gap: 18px; grid-template-columns: 200px minmax(300px, 1fr); align-items: start; min-width: 0; }
   .product-image {
     align-items: center;
     aspect-ratio: 3 / 4;
@@ -172,7 +172,8 @@
   .order-history-op strong { display: block; }
   .section-title { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; }
   .section-title h2 { margin: 0; }
-  .split-actions { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .split-actions { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; }
+  .split-actions > .card { min-width: 0; }
   .empty-cell { color: #98a2b3; }
   .draft-modal[hidden] { display: none; }
   .draft-modal {
