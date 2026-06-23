@@ -95,7 +95,7 @@ def _run_runtime_migrations(engine, schema: str) -> None:
                 f"UPDATE {table_name_mapping} "
                 "SET full_name = 'Костюм спортивный' "
                 "WHERE COALESCE(full_name, '') = '' "
-                "AND UPPER(product_type) = 'КОСТЮМ СПОРТИВНЫЙ'"
+                "AND UPPER(product_type) IN ('КОСТЮМ СПОРТИВНЫЙ', 'КОСТЮМЫ СПОРТИВНЫЕ')"
             )
         )
 

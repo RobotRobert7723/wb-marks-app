@@ -1482,6 +1482,7 @@
   function productFullNameFrom(value) {
     const text = String(value || '').trim().toLowerCase();
     if (!text) return '';
+    if (text === 'костюм спортивный' || text === 'костюмы спортивные') return 'Костюм спортивный';
     return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
   }
 

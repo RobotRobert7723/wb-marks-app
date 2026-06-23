@@ -134,6 +134,37 @@ def test_apply_latest_uses_teksher_data_when_provided() -> None:
     assert mapped_card.rows[0].tnved == "6112120000"
 
 
+def test_save_version_builds_singular_full_name_from_plural_product_type() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    service = TeksherMappingService()
+    product_card = _product_card()
+
+    with Session(engine) as session:
+        service.save_version(
+            session,
+            "user-1",
+            product_card,
+            [
+                {
+                    "wb_barcode": "2049271462689",
+                    "wb_size": "38",
+                    "wb_ru_size": "134",
+                    "teksher_size": "38 МЕЖДУНАРОДНЫЙ",
+                    "product_type": "КОСТЮМЫ СПОРТИВНЫЕ",
+                    "gtin": "04709055620626",
+                }
+            ],
+            source="gtin_excel",
+        )
+        session.commit()
+
+    with Session(engine) as session:
+        _version, saved_rows = service.latest_payload(session, "user-1", "847012873")
+
+    assert saved_rows[0]["full_name"] == "Костюм спортивный"
+
+
 def test_save_version_fills_missing_values_from_wb() -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)

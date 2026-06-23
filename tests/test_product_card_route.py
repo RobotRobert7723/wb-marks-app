@@ -1388,6 +1388,8 @@ def _full_name_from_product_type(value) -> str:
     text = str(value or "").strip().lower()
     if not text:
         return ""
+    if text.casefold() in {"костюм спортивный", "костюмы спортивные"}:
+        return "Костюм спортивный"
     return text[:1].upper() + text[1:]
 
 

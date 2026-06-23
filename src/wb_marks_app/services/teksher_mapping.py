@@ -31,6 +31,11 @@ TARGET_GENDER_MAP = {
     "детский": "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)",
 }
 
+PRODUCT_TYPE_FULL_NAME_MAP = {
+    "костюм спортивный": "Костюм спортивный",
+    "костюмы спортивные": "Костюм спортивный",
+}
+
 
 class TeksherMappingService:
     def apply_latest(
@@ -318,6 +323,9 @@ class TeksherMappingService:
         text = self._text(value).lower()
         if not text:
             return ""
+        mapped = PRODUCT_TYPE_FULL_NAME_MAP.get(text.casefold())
+        if mapped:
+            return mapped
         return text[:1].upper() + text[1:]
 
     def _text(self, value) -> str:
