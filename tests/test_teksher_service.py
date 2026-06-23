@@ -13,7 +13,13 @@ from wb_marks_app.services.teksher import (
     TEKSHER_CLOTHING_REGULATION,
     TeksherService,
 )
+from wb_marks_app.services.labels import GS
 from wb_marks_app.teksher_api_cli import run_full_flow
+
+
+GS1_CODE_1 = "0104709055620664215YudSpca<mc9X" + GS + "91EE12" + GS + "92" + ("A" * 44)
+GS1_CODE_2 = "0104709055620664215YudSpca<mc9Y" + GS + "91EE12" + GS + "92" + ("B" * 44)
+FAKE_CODES_CSV = f"number;marking_code\n1;{GS1_CODE_1}\n2;{GS1_CODE_2}\n"
 
 
 class FakeBrowser:
@@ -135,7 +141,7 @@ class FakeSession:
         if url.endswith("/facade/api/v1/notifications/posts/participants/unread"):
             return FakeResponse(200, json_data={"status": "200", "message": None, "data": True})
         if url.endswith("/facade/api/v1/marking_codes/csv?operationId=marking-op-1"):
-            return FakeResponse(200, content=b"MARK-1\nMARK-2\n")
+            return FakeResponse(200, content=FAKE_CODES_CSV.encode("utf-8"))
         raise AssertionError(f"Unexpected GET {url}")
 
 
@@ -395,7 +401,7 @@ class TeksherServiceTests(unittest.TestCase):
 
         result = service.issue_marks(tasks, config)
 
-        self.assertEqual(["MARK-1", "MARK-2"], [task.mark_code for task in result])
+        self.assertEqual([GS1_CODE_1, GS1_CODE_2], [task.mark_code for task in result])
         self.assertTrue(all(task.status == "issued" for task in result))
 
     def test_run_full_cycle_saves_csv(self) -> None:
@@ -416,7 +422,7 @@ class TeksherServiceTests(unittest.TestCase):
 
             self.assertEqual(destination, result)
             self.assertTrue(destination.exists())
-            self.assertEqual("MARK-1\nMARK-2\n", destination.read_text(encoding="utf-8"))
+            self.assertEqual(FAKE_CODES_CSV, destination.read_text(encoding="utf-8"))
 
     def test_run_full_cycle_fetches_token_from_credentials(self) -> None:
         session = FakeSession()

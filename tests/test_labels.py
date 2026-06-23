@@ -3,6 +3,7 @@ import unittest
 from wb_marks_app.services.labels import (
     GS,
     build_manual_labels,
+    extract_gs1_mark_codes,
     extract_mark_codes,
     parse_mark_code,
     validate_mark_code_for_datamatrix,
@@ -35,6 +36,14 @@ class LabelServiceTests(unittest.TestCase):
 
         self.assertEqual(1, len(codes))
         self.assertEqual('010470009226344921"5MQM_dofDhG', codes[0].split(GS)[0])
+
+    def test_extract_gs1_mark_codes_finds_codes_in_csv_columns(self) -> None:
+        code = "0104709055620664215YudSpca<mc9X" + GS + "91EE12" + GS + "92" + ("A" * 44)
+        text = f"status;marking_code\naccepted;{code}\nignored;not-a-gs1-code\n"
+
+        codes = extract_gs1_mark_codes(text)
+
+        self.assertEqual([code], codes)
 
     def test_build_manual_labels_uses_one_label_per_mark_code(self) -> None:
         text = "0104700092263449215/ExwqH/2ziur\\x1d91EE12\\x1d923rhVzA0Rg7nIB\n"

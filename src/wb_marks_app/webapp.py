@@ -44,7 +44,7 @@ from wb_marks_app.server_settings import (
 from wb_marks_app.services.browser import BrowserSessionManager
 from wb_marks_app.services.gtin_excel import GtinExcelParser
 from wb_marks_app.services.label_pdf import LabelPdfError, render_labels_pdf
-from wb_marks_app.services.labels import build_manual_labels, labels_to_dicts, make_label_record
+from wb_marks_app.services.labels import build_manual_labels, extract_gs1_mark_codes, labels_to_dicts, make_label_record
 from wb_marks_app.services.product_cards import ProductCardTemplateService
 from wb_marks_app.services.server_workflow import LaunchRequest, WorkflowRunService
 from wb_marks_app.services.teksher import ExistingTeksherProductError, TeksherService
@@ -1092,6 +1092,30 @@ def _product_card_order_history(session: Session, user_id: str, wb_article: str)
     return [_serialize_product_card_order_run(run, session) for run in runs]
 
 
+def _product_card_item_mark_codes(session: Session, item: WorkflowRunItemModel) -> list[str]:
+    mark_codes = session.execute(
+        select(MarkCodeModel)
+        .where(MarkCodeModel.run_item_id == item.id)
+        .order_by(MarkCodeModel.position)
+    ).scalars().all()
+    codes = extract_gs1_mark_codes("\n".join(mark_code.mark_code for mark_code in mark_codes if mark_code.mark_code))
+    if codes:
+        return codes
+
+    artifact = session.execute(
+        select(ArtifactModel)
+        .where(ArtifactModel.run_item_id == item.id)
+        .where(ArtifactModel.kind == "csv")
+    ).scalars().first()
+    if artifact is None or not artifact.file_path:
+        return []
+    try:
+        text = Path(artifact.file_path).read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return []
+    return extract_gs1_mark_codes(text)
+
+
 def _product_card_ready_to_print_counts(session: Session, user_id: str, wb_article: str) -> dict[str, int]:
     if not hasattr(session, "execute"):
         return {}
@@ -1114,7 +1138,11 @@ def _product_card_ready_to_print_counts(session: Session, user_id: str, wb_artic
         if not size_key or size_key in seen:
             continue
         seen.add(size_key)
-        counts[size_key] = item.quantity if marking is not None and str(marking.status or "").upper() == "ACCEPTED" else 0
+        counts[size_key] = (
+            len(_product_card_item_mark_codes(session, item))
+            if marking is not None and str(marking.status or "").upper() == "ACCEPTED"
+            else 0
+        )
     return counts
 
 
@@ -1230,12 +1258,7 @@ def _product_card_label_print_sources(session: Session, user_id: str, product_ca
         row = rows_by_size.get(size_key)
         if row is None:
             continue
-        mark_codes = session.execute(
-            select(MarkCodeModel)
-            .where(MarkCodeModel.run_item_id == item.id)
-            .order_by(MarkCodeModel.position)
-        ).scalars().all()
-        codes = [mark_code.mark_code for mark_code in mark_codes if mark_code.mark_code]
+        codes = _product_card_item_mark_codes(session, item)
         if not codes:
             continue
         sources.append({"item": item, "row": row, "mark_codes": codes})

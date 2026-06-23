@@ -82,6 +82,23 @@ def extract_mark_codes(text: str) -> list[str]:
     return codes
 
 
+def extract_gs1_mark_codes(text: str) -> list[str]:
+    codes: list[str] = []
+    seen: set[str] = set()
+    normalized = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    for raw_line in normalized.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        for field in _csv_candidate_fields(line):
+            parsed = parse_mark_code(field)
+            if not parsed.valid or parsed.raw in seen:
+                continue
+            seen.add(parsed.raw)
+            codes.append(parsed.raw)
+    return codes
+
+
 def parse_mark_code(value: str) -> ParsedMarkCode:
     code = _normalize_ai_parentheses(normalize_mark_code(value))
     if not code:
@@ -319,6 +336,28 @@ def _first_csv_field(line: str) -> str:
     except csv.Error:
         return line.strip('"')
     return str(row[0]) if row else ""
+
+
+def _csv_candidate_fields(line: str) -> list[str]:
+    values: list[str] = [line]
+    for delimiter in (",", ";", "\t"):
+        if delimiter not in line and not line.startswith('"'):
+            continue
+        try:
+            row = next(csv.reader([line], delimiter=delimiter))
+        except csv.Error:
+            continue
+        values.extend(str(value) for value in row)
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = normalize_mark_code(value)
+        if not normalized or normalized in seen or _looks_like_header(normalized):
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
 
 
 def _looks_like_header(value: str) -> bool:

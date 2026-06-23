@@ -958,7 +958,8 @@ class ProductCardRouteTests(unittest.TestCase):
         from sqlalchemy import create_engine
         from sqlalchemy.orm import Session
         from wb_marks_app.db import Base
-        from wb_marks_app.server_models import TeksherOperationModel, WorkflowRunItemModel, WorkflowRunModel
+        from wb_marks_app.server_models import MarkCodeModel, TeksherOperationModel, WorkflowRunItemModel, WorkflowRunModel
+        from wb_marks_app.services.labels import GS
 
         engine = create_engine("sqlite:///:memory:", future=True)
         Base.metadata.create_all(engine)
@@ -1017,7 +1018,19 @@ class ProductCardRouteTests(unittest.TestCase):
                 created_at=datetime(2026, 6, 23, 11, 0, tzinfo=timezone.utc),
             )
             accepted_marking = TeksherOperationModel(run_item=accepted_item, operation_kind="marking", status="ACCEPTED")
-            session.add_all([old_marking, failed_marking, accepted_marking])
+            valid_mark_code_1 = "0104709055620664215YudSpca<mc9X" + GS + "91EE12" + GS + "92" + ("A" * 44)
+            valid_mark_code_2 = "0104709055620664215YudSpca<mc9Y" + GS + "91EE12" + GS + "92" + ("B" * 44)
+            accepted_code_1 = MarkCodeModel(
+                run_item=accepted_item,
+                position=1,
+                mark_code=f"1;{valid_mark_code_1}",
+            )
+            accepted_code_2 = MarkCodeModel(
+                run_item=accepted_item,
+                position=2,
+                mark_code=f"2;{valid_mark_code_2}",
+            )
+            session.add_all([old_marking, failed_marking, accepted_marking, accepted_code_1, accepted_code_2])
             session.commit()
 
             counts = webapp._product_card_ready_to_print_counts(session, "user-1", "847012873")
