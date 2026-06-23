@@ -220,6 +220,26 @@ class ArtifactModel(Base):
     run_item: Mapped["WorkflowRunItemModel"] = relationship(back_populates="artifacts")
 
 
+class LabelPrintJobModel(Base):
+    __tablename__ = "label_print_jobs"
+    __table_args__ = {"schema": SCHEMA} if SCHEMA else {}
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey(_fk("users.id"), ondelete="SET NULL"), index=True, nullable=True)
+    wb_article: Mapped[str] = mapped_column(String(64), index=True)
+    wb_size: Mapped[str] = mapped_column(String(64), index=True, default="")
+    gtin: Mapped[str] = mapped_column(String(64), default="")
+    barcode: Mapped[str] = mapped_column(String(64), default="")
+    vendor_code: Mapped[str] = mapped_column(String(255), default="")
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    template: Mapped[str] = mapped_column(String(32), default="srad")
+    file_id: Mapped[str] = mapped_column(String(32), index=True, default="")
+    file_name: Mapped[str] = mapped_column(String(255), default="")
+    status: Mapped[str] = mapped_column(String(32), index=True, default="created")
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+
+
 class PasswordResetTokenModel(Base):
     __tablename__ = "password_reset_tokens"
     __table_args__ = (

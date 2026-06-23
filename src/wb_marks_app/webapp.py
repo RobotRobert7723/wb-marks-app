@@ -28,6 +28,7 @@ from wb_marks_app.server_auth import (
 from wb_marks_app.server_models import (
     AppSettingsModel,
     ArtifactModel,
+    LabelPrintJobModel,
     MarkCodeModel,
     TeksherOperationModel,
     UserModel,
@@ -625,6 +626,42 @@ def create_app() -> FastAPI:
                 "status": _serialize_product_card_order_run(run, session),
             }
 
+    @app.post("/api/product-cards/{wb_article}/label-print")
+    async def create_product_card_label_print(request: Request, wb_article: str):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        try:
+            template = _product_card_label_template(str(payload.get("template") or payload.get("template_name") or "srad"))
+            with session_scope() as session:
+                settings = get_or_create_settings(session, user_id)
+                config = settings_to_app_config(settings)
+            product_card = product_card_service.build_template(wb_article, config)
+            with session_scope() as session:
+                result = _create_product_card_label_pdf(request, session, user_id, product_card, template)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+        except LabelPdfError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+        return result
+
+    @app.get("/api/product-cards/{wb_article}/label-prints")
+    def list_product_card_label_prints(request: Request, wb_article: str):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        with session_scope() as session:
+            return {
+                "ok": True,
+                "history": _product_card_label_print_history(request, session, user_id, wb_article),
+            }
+
     @app.post("/labels/preview", response_class=HTMLResponse)
     def labels_preview_page(
         request: Request,
@@ -1087,6 +1124,173 @@ def _apply_product_card_ready_to_print_counts(product_card, counts: dict[str, in
         for row in product_card.rows
     ]
     return replace(product_card, rows=rows)
+
+
+def _create_product_card_label_pdf(
+    request: Request,
+    session: Session,
+    user_id: str,
+    product_card,
+    template: str,
+) -> dict:
+    sources = _product_card_label_print_sources(session, user_id, product_card)
+    if not sources:
+        raise ValueError("Нет готовых к печати этикеток для этой карточки.")
+
+    total = sum(len(source["mark_codes"]) for source in sources)
+    labels = []
+    for source in sources:
+        item = source["item"]
+        row = source["row"]
+        for code in source["mark_codes"]:
+            labels.append(
+                make_label_record(
+                    template=template,
+                    item_name=item.wb_item_name or product_card.wb_summary.name,
+                    vendor_code=item.vendor_code or row.vendor_article or product_card.wb_summary.seller_article,
+                    size=item.size or row.wb_size,
+                    color=row.color or product_card.wb_summary.color,
+                    composition=row.composition or product_card.wb_summary.composition,
+                    wb_barcode=item.barcode or row.barcode,
+                    mark_code=code,
+                    unit_count="1",
+                    index=len(labels) + 1,
+                    total=total,
+                    country_of_origin=row.country or product_card.wb_summary.country,
+                    brand=row.trademark or product_card.wb_summary.brand,
+                )
+            )
+
+    pdf = render_labels_pdf(labels, template=template)
+    file_id = uuid.uuid4().hex
+    file_name = f"wb_{product_card.wb_article}_{file_id[:8]}_58x40.pdf"
+    file_path = _label_pdf_file_path(user_id, file_id)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_bytes(pdf)
+
+    for source in sources:
+        item = source["item"]
+        row = source["row"]
+        session.add(
+            LabelPrintJobModel(
+                user_id=user_id,
+                wb_article=product_card.wb_article,
+                wb_size=item.size or row.wb_size,
+                gtin=item.gtin,
+                barcode=item.barcode or row.barcode,
+                vendor_code=item.vendor_code or row.vendor_article or product_card.wb_summary.seller_article,
+                quantity=len(source["mark_codes"]),
+                template=template,
+                file_id=file_id,
+                file_name=file_name,
+                status="created",
+            )
+        )
+
+    session.flush()
+    return {
+        "ok": True,
+        "message": f"PDF этикеток создан: {total}.",
+        "template": template,
+        "download_url": str(request.url_for("download_label_pdf_api", file_id=file_id)),
+        "file_id": file_id,
+        "file_name": file_name,
+        "labels_count": total,
+        "pages_count": _pdf_page_count(pdf),
+        "history": _product_card_label_print_history(request, session, user_id, product_card.wb_article),
+    }
+
+
+def _product_card_label_print_sources(session: Session, user_id: str, product_card) -> list[dict]:
+    if not hasattr(session, "execute"):
+        return []
+    rows_by_size = {_product_card_size_key(row.wb_size): row for row in product_card.rows}
+    rows = session.execute(
+        select(WorkflowRunItemModel, TeksherOperationModel)
+        .join(WorkflowRunModel, WorkflowRunModel.id == WorkflowRunItemModel.run_id)
+        .outerjoin(
+            TeksherOperationModel,
+            (TeksherOperationModel.run_item_id == WorkflowRunItemModel.id)
+            & (TeksherOperationModel.operation_kind == "marking"),
+        )
+        .where(WorkflowRunModel.user_id == user_id)
+        .where(WorkflowRunModel.source_url == f"/product-cards/{product_card.wb_article}")
+        .order_by(WorkflowRunModel.created_at.desc(), WorkflowRunItemModel.created_at.desc())
+    ).all()
+
+    sources: list[dict] = []
+    seen: set[str] = set()
+    for item, marking in rows:
+        size_key = _product_card_size_key(item.size)
+        if not size_key or size_key in seen:
+            continue
+        seen.add(size_key)
+        if marking is None or str(marking.status or "").upper() != "ACCEPTED":
+            continue
+        row = rows_by_size.get(size_key)
+        if row is None:
+            continue
+        mark_codes = session.execute(
+            select(MarkCodeModel)
+            .where(MarkCodeModel.run_item_id == item.id)
+            .order_by(MarkCodeModel.position)
+        ).scalars().all()
+        codes = [mark_code.mark_code for mark_code in mark_codes if mark_code.mark_code]
+        if not codes:
+            continue
+        sources.append({"item": item, "row": row, "mark_codes": codes})
+    return sources
+
+
+def _product_card_label_print_history(request: Request, session: Session, user_id: str, wb_article: str) -> list[dict]:
+    if not hasattr(session, "execute"):
+        return []
+    rows = session.execute(
+        select(LabelPrintJobModel)
+        .where(LabelPrintJobModel.user_id == user_id)
+        .where(LabelPrintJobModel.wb_article == wb_article)
+        .order_by(LabelPrintJobModel.created_at.desc())
+    ).scalars().all()
+    return [_serialize_product_card_label_print(request, row) for row in rows]
+
+
+def _serialize_product_card_label_print(request: Request, row: LabelPrintJobModel) -> dict:
+    return {
+        "id": row.id,
+        "created_at": row.created_at.isoformat() if row.created_at else "",
+        "size": row.wb_size,
+        "gtin": row.gtin,
+        "barcode": row.barcode,
+        "vendor_code": row.vendor_code,
+        "quantity": row.quantity,
+        "template": _product_card_label_template_label(row.template),
+        "status": row.status,
+        "error": row.error,
+        "file_id": row.file_id,
+        "file_name": row.file_name or (f"labels_{row.file_id[:8]}_58x40.pdf" if row.file_id else ""),
+        "download_url": str(request.url_for("download_label_pdf_api", file_id=row.file_id)) if row.file_id else "",
+    }
+
+
+def _product_card_label_template(value: str) -> str:
+    key = str(value or "srad").strip().casefold()
+    aliases = {
+        "srad": "srad",
+        "combined": "srad",
+        "58x40_full": "srad",
+        "simple": "simple",
+        "58x40_simple": "simple",
+        "medium": "medium",
+        "58x40_medium": "medium",
+    }
+    if key not in aliases:
+        raise ValueError("Неизвестный шаблон печати этикеток.")
+    return aliases[key]
+
+
+def _product_card_label_template_label(value: str) -> str:
+    labels = {"srad": "SRad", "simple": "Simple", "medium": "Medium"}
+    return labels.get(_product_card_label_template(value), "SRad")
 
 
 def _product_card_size_key(value: str) -> str:

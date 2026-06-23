@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from base64 import b64encode
 from io import BytesIO
+from tempfile import TemporaryDirectory
 
 from fastapi.testclient import TestClient
 from itsdangerous import TimestampSigner
@@ -118,6 +119,13 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn('data-wb-brand="ErLine"', page.text)
             self.assertIn('data-has-mapping="false"', page.text)
             self.assertIn('id="mapping-save-button" class="secondary" disabled', page.text)
+            self.assertIn('id="label-template-select"', page.text)
+            self.assertIn('<option value="srad" selected>SRad</option>', page.text)
+            self.assertIn('id="print-labels-button"', page.text)
+            self.assertIn('id="print-history-button"', page.text)
+            self.assertIn('id="print-history-panel" class="card order-history-panel print-history-panel"', page.text)
+            self.assertIn("/label-print", page.text)
+            self.assertIn("/label-prints", page.text)
             self.assertIn("Для этой карточки уже есть GTIN. Действительно хотите обновить", page.text)
             self.assertIn("В таблице есть красные поля. Сохранить?", page.text)
             self.assertIn("gtin-loaded", page.text)
@@ -820,6 +828,131 @@ class ProductCardRouteTests(unittest.TestCase):
             webapp.session_scope = old_session_scope
             webapp._product_card_order_history = old_product_card_order_history
 
+    def test_label_print_endpoint_uses_product_card_pdf_helper(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from wb_marks_app.models import AppConfig
+        from wb_marks_app.services.product_cards import ProductCardTemplate, ProductCardMappingRow, WbProductSummary
+
+        old_create_all = webapp.create_all
+        old_load_config = webapp.load_config
+        old_session_scope = webapp.session_scope
+        old_get_or_create_settings = webapp.get_or_create_settings
+        old_settings_to_app_config = webapp.settings_to_app_config
+        old_product_card_service = webapp.product_card_service
+        old_create_product_card_label_pdf = webapp._create_product_card_label_pdf
+        calls = []
+        webapp.create_all = lambda: None
+        webapp.load_config = lambda: AppConfig(secret_key="test-secret")
+        webapp.session_scope = lambda: FakeSessionScope()
+        webapp.get_or_create_settings = lambda _session, _user_id: object()
+        webapp.settings_to_app_config = lambda _settings: AppConfig(wb_api_token="token")
+        webapp._create_product_card_label_pdf = lambda request, session, user_id, product_card, template: calls.append(
+            {
+                "user_id": user_id,
+                "product_card": product_card,
+                "template": template,
+            }
+        ) or {
+            "ok": True,
+            "download_url": "http://testserver/api/labels/pdf/file",
+            "labels_count": 2,
+            "history": [],
+        }
+        webapp.product_card_service = FakeProductCardService(
+            ProductCardTemplate(
+                wb_article="847012873",
+                image_url="",
+                api_status="",
+                wb_summary=WbProductSummary(
+                    name="Sport suit",
+                    seller_category="Sport suits",
+                    wb_article="847012873",
+                    tnved="6112120000",
+                    country="KG",
+                    seller_article="cv_nk_blue_smr",
+                    color="blue",
+                    composition="polyester 100%",
+                    gender="boys",
+                    brand="ErLine",
+                ),
+                rows=[
+                    ProductCardMappingRow(
+                        barcode="2049271462634",
+                        wb_size="38",
+                        ru_size="134",
+                        teksher_size="",
+                        product_type="",
+                        gtin="04709055620664",
+                        tnved="",
+                        country="",
+                        vendor_article="",
+                        color="",
+                        composition="",
+                        target_gender="",
+                        trademark="",
+                        ready_to_mark=0,
+                        print_count=1,
+                        order_count=0,
+                    )
+                ],
+            )
+        )
+        try:
+            app = webapp.create_app()
+            client = TestClient(app)
+            client.cookies.set("wb_marks_session", _session_cookie({"user_id": "user-1", "login": "tester"}, "test-secret"))
+
+            response = client.post("/api/product-cards/847012873/label-print", json={"template": "Medium"})
+
+            self.assertEqual(200, response.status_code)
+            payload = response.json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(2, payload["labels_count"])
+            self.assertEqual("medium", calls[0]["template"])
+            self.assertEqual("847012873", calls[0]["product_card"].wb_article)
+            client.close()
+        finally:
+            webapp.create_all = old_create_all
+            webapp.load_config = old_load_config
+            webapp.session_scope = old_session_scope
+            webapp.get_or_create_settings = old_get_or_create_settings
+            webapp.settings_to_app_config = old_settings_to_app_config
+            webapp.product_card_service = old_product_card_service
+            webapp._create_product_card_label_pdf = old_create_product_card_label_pdf
+
+    def test_label_print_history_endpoint_returns_latest_first(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from wb_marks_app.models import AppConfig
+
+        old_create_all = webapp.create_all
+        old_load_config = webapp.load_config
+        old_session_scope = webapp.session_scope
+        old_product_card_label_print_history = webapp._product_card_label_print_history
+        webapp.create_all = lambda: None
+        webapp.load_config = lambda: AppConfig(secret_key="test-secret")
+        webapp.session_scope = lambda: FakeSessionScope()
+        webapp._product_card_label_print_history = lambda request, _session, user_id, wb_article: [
+            {"id": "new-print", "created_at": "2026-06-23T10:00:00", "template": "SRad"},
+            {"id": "old-print", "created_at": "2026-06-23T09:00:00", "template": "Simple"},
+        ]
+        try:
+            app = webapp.create_app()
+            client = TestClient(app)
+            client.cookies.set("wb_marks_session", _session_cookie({"user_id": "user-1", "login": "tester"}, "test-secret"))
+
+            response = client.get("/api/product-cards/847012873/label-prints")
+
+            self.assertEqual(200, response.status_code)
+            payload = response.json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(["new-print", "old-print"], [item["id"] for item in payload["history"]])
+            client.close()
+        finally:
+            webapp.create_all = old_create_all
+            webapp.load_config = old_load_config
+            webapp.session_scope = old_session_scope
+            webapp._product_card_label_print_history = old_product_card_label_print_history
+
     def test_ready_to_print_counts_use_latest_marking_operation(self) -> None:
         import wb_marks_app.webapp as webapp
         from sqlalchemy import create_engine
@@ -891,6 +1024,107 @@ class ProductCardRouteTests(unittest.TestCase):
 
         self.assertEqual(0, counts["38"])
         self.assertEqual(2, counts["40"])
+
+    def test_product_card_label_pdf_helper_saves_print_history(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from pathlib import Path
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session
+        from wb_marks_app.db import Base
+        from wb_marks_app.server_models import LabelPrintJobModel, MarkCodeModel, TeksherOperationModel, WorkflowRunItemModel, WorkflowRunModel
+        from wb_marks_app.services.labels import GS
+        from wb_marks_app.services.product_cards import ProductCardTemplate, ProductCardMappingRow, WbProductSummary
+
+        class FakeRequest:
+            def url_for(self, _name, file_id):
+                return f"http://testserver/api/labels/pdf/{file_id}"
+
+        valid_mark_code = "0104709055620664215YudSpca<mc9X" + GS + "91EE12" + GS + "92" + ("A" * 44)
+        product_card = ProductCardTemplate(
+            wb_article="847012873",
+            image_url="",
+            api_status="",
+            wb_summary=WbProductSummary(
+                name="Sport suit",
+                seller_category="Sport suits",
+                wb_article="847012873",
+                tnved="6112120000",
+                country="KG",
+                seller_article="cv_nk_blue_smr",
+                color="blue",
+                composition="polyester 100%",
+                gender="boys",
+                brand="ErLine",
+            ),
+            rows=[
+                ProductCardMappingRow(
+                    barcode="2049271462634",
+                    wb_size="38",
+                    ru_size="134",
+                    teksher_size="",
+                    product_type="",
+                    gtin="04709055620664",
+                    tnved="6112120000",
+                    country="KG",
+                    vendor_article="cv_nk_blue_smr",
+                    color="BLUE",
+                    composition="polyester 100%",
+                    target_gender="",
+                    trademark="ErLine",
+                    ready_to_mark=0,
+                    print_count=1,
+                    order_count=0,
+                )
+            ],
+        )
+        old_render_labels_pdf = webapp.render_labels_pdf
+        old_label_pdf_file_path = webapp._label_pdf_file_path
+        engine = create_engine("sqlite:///:memory:", future=True)
+        Base.metadata.create_all(engine)
+        with TemporaryDirectory() as tmp:
+            webapp.render_labels_pdf = lambda labels, template: b"%PDF\n/Type /Page\n/Type /Pages\n"
+            webapp._label_pdf_file_path = lambda _user_id, file_id: Path(tmp) / f"{file_id}.pdf"
+            try:
+                with Session(engine) as session:
+                    run = WorkflowRunModel(
+                        user_id="user-1",
+                        draft_id="run-1",
+                        source_url="/product-cards/847012873",
+                        status="completed",
+                        created_at=datetime(2026, 6, 23, 10, 0, tzinfo=timezone.utc),
+                    )
+                    item = WorkflowRunItemModel(
+                        run=run,
+                        barcode="2049271462634",
+                        vendor_code="cv_nk_blue_smr",
+                        size="38",
+                        gtin="04709055620664",
+                        quantity=1,
+                        status="completed",
+                        wb_item_name="Sport suit",
+                        created_at=datetime(2026, 6, 23, 10, 0, tzinfo=timezone.utc),
+                    )
+                    operation = TeksherOperationModel(run_item=item, operation_kind="marking", status="ACCEPTED")
+                    mark_code = MarkCodeModel(run_item=item, position=1, mark_code=valid_mark_code)
+                    session.add_all([operation, mark_code])
+                    session.commit()
+
+                    result = webapp._create_product_card_label_pdf(FakeRequest(), session, "user-1", product_card, "srad")
+
+                    self.assertTrue(result["ok"])
+                    self.assertEqual(1, result["labels_count"])
+                    self.assertEqual(1, result["pages_count"])
+                    self.assertTrue((Path(tmp) / f"{result['file_id']}.pdf").exists())
+                    jobs = session.query(LabelPrintJobModel).all()
+                    self.assertEqual(1, len(jobs))
+                    self.assertEqual("38", jobs[0].wb_size)
+                    self.assertEqual("04709055620664", jobs[0].gtin)
+                    self.assertEqual(1, jobs[0].quantity)
+                    self.assertEqual("srad", jobs[0].template)
+                    self.assertEqual("SRad", result["history"][0]["template"])
+            finally:
+                webapp.render_labels_pdf = old_render_labels_pdf
+                webapp._label_pdf_file_path = old_label_pdf_file_path
 
 
 class FakeSessionScope:

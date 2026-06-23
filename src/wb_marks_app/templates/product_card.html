@@ -31,6 +31,23 @@
   .source-chip.template { background: #eaf3ff; color: #1c5794; }
   .product-actions { display: flex; flex-wrap: wrap; gap: 12px; }
   .product-actions .button, .product-actions button { min-width: 160px; text-align: center; }
+  .label-template-control {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 12px 0;
+  }
+  .label-template-control label { color: #344054; font-weight: 700; }
+  .label-template-control select {
+    border: 1px solid #cfd4dc;
+    border-radius: 6px;
+    color: #1d2939;
+    font: inherit;
+    min-height: 38px;
+    padding: 7px 10px;
+    width: 160px;
+  }
   .upload-status { font-weight: 700; margin-top: 12px; }
   .upload-status.error { color: #b42318; }
   .upload-status.success { color: #3f6212; }
@@ -128,8 +145,14 @@
     min-width: 1280px;
     width: 100%;
   }
+  .print-history-table {
+    min-width: 980px;
+    width: 100%;
+  }
   .order-history-table th,
-  .order-history-table td {
+  .order-history-table td,
+  .print-history-table th,
+  .print-history-table td {
     height: 30px;
     padding-bottom: 5px;
     padding-top: 5px;
@@ -270,6 +293,14 @@
         </div>
         <p class="muted">Адрес страницы содержит артикул WB: <code>/product-cards/{{ product_card.wb_article }}</code></p>
         <p class="muted">{{ product_card.api_status }}</p>
+        <div class="label-template-control">
+          <label for="label-template-select">Шаблон печати</label>
+          <select id="label-template-select">
+            <option value="srad" selected>SRad</option>
+            <option value="simple">Simple</option>
+            <option value="medium">Medium</option>
+          </select>
+        </div>
         <div class="product-actions">
           <button type="button" id="gtin-upload-button">Загрузить GTIN</button>
           <input id="gtin-upload-input" type="file" accept=".xlsx,.xlsm" hidden />
@@ -511,8 +542,10 @@
         </table>
       </div>
       <div class="actions" style="margin-top: 14px;">
-        <button type="button" class="secondary">Напечатать этикетки</button>
+        <button type="button" class="secondary" id="print-labels-button">Напечатать этикетки</button>
+        <button type="button" class="secondary" id="print-history-button">История печати</button>
       </div>
+      <div id="print-label-status" class="order-run-status" role="status" aria-live="polite"></div>
     </div>
   </div>
 
@@ -551,6 +584,38 @@
       </table>
     </div>
   </div>
+
+  <div id="print-history-panel" class="card order-history-panel print-history-panel" hidden>
+    <div class="order-history-title">
+      <h3>История печати</h3>
+    </div>
+    <div id="print-history-message" class="order-run-status" role="status" aria-live="polite"></div>
+    <div class="table-scroll">
+      <table class="mapping-table print-history-table">
+        <colgroup>
+          <col style="width: 16%;" />
+          <col style="width: 8%;" />
+          <col style="width: 16%;" />
+          <col style="width: 8%;" />
+          <col style="width: 12%;" />
+          <col style="width: 18%;" />
+          <col style="width: 22%;" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th class="template-head">Дата печати</th>
+            <th class="template-head">Размер</th>
+            <th class="template-head">GTIN</th>
+            <th class="template-head">Кол-во</th>
+            <th class="template-head">Шаблон</th>
+            <th class="template-head">Статус</th>
+            <th class="template-head">PDF</th>
+          </tr>
+        </thead>
+        <tbody id="print-history-body"></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 <script>
 (() => {
@@ -578,6 +643,13 @@
   const orderHistoryPanel = document.getElementById('order-history-panel');
   const orderHistoryBody = document.getElementById('order-history-body');
   const orderHistoryMessage = document.getElementById('order-history-message');
+  const labelTemplateSelect = document.getElementById('label-template-select');
+  const printLabelsButton = document.getElementById('print-labels-button');
+  const printLabelStatus = document.getElementById('print-label-status');
+  const printHistoryButton = document.getElementById('print-history-button');
+  const printHistoryPanel = document.getElementById('print-history-panel');
+  const printHistoryBody = document.getElementById('print-history-body');
+  const printHistoryMessage = document.getElementById('print-history-message');
   if (!page || !uploadButton || !input || !saveButton || !status) return;
 
   let hasUnsavedGtin = false;
@@ -636,6 +708,12 @@
   }
   if (orderHistoryButton) {
     orderHistoryButton.addEventListener('click', () => toggleOrderHistory());
+  }
+  if (printLabelsButton) {
+    printLabelsButton.addEventListener('click', () => startLabelPrint());
+  }
+  if (printHistoryButton) {
+    printHistoryButton.addEventListener('click', () => togglePrintHistory());
   }
   resetMarkOrderInputs();
 
@@ -730,6 +808,90 @@
     });
   }
 
+  async function startLabelPrint() {
+    const template = labelTemplateSelect ? labelTemplateSelect.value : 'srad';
+    setPrintLabelStatus('Готовим PDF этикеток...', '');
+    if (printLabelsButton) printLabelsButton.disabled = true;
+    try {
+      const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/label-print`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.ok) {
+        setPrintLabelStatus(payload.message || payload.detail || 'Не удалось создать PDF этикеток.', 'error');
+        return;
+      }
+      setPrintLabelStatus(payload.message || 'PDF этикеток создан.', 'success');
+      if (payload.download_url) {
+        window.open(payload.download_url, '_blank', 'noopener');
+      }
+      if (printHistoryPanel && !printHistoryPanel.hidden) {
+        renderPrintHistory(payload.history || []);
+        setPrintHistoryMessage('', '');
+      }
+    } catch (error) {
+      setPrintLabelStatus('Не удалось создать PDF этикеток.', 'error');
+    } finally {
+      if (printLabelsButton) printLabelsButton.disabled = false;
+    }
+  }
+
+  async function togglePrintHistory() {
+    if (!printHistoryPanel) return;
+    if (!printHistoryPanel.hidden) {
+      printHistoryPanel.hidden = true;
+      return;
+    }
+    printHistoryPanel.hidden = false;
+    await loadPrintHistory();
+  }
+
+  async function loadPrintHistory(silent = false) {
+    if (!printHistoryBody) return;
+    if (!silent) {
+      setPrintHistoryMessage('Загружаем историю печати...', '');
+      if (printHistoryButton) printHistoryButton.disabled = true;
+    }
+    try {
+      const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/label-prints`);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.ok) {
+        setPrintHistoryMessage(payload.message || payload.detail || 'Не удалось загрузить историю печати.', 'error');
+        return;
+      }
+      renderPrintHistory(payload.history || []);
+      if (!silent) setPrintHistoryMessage('', '');
+    } catch (error) {
+      setPrintHistoryMessage('Не удалось загрузить историю печати.', 'error');
+    } finally {
+      if (!silent && printHistoryButton) printHistoryButton.disabled = false;
+    }
+  }
+
+  function renderPrintHistory(history) {
+    if (!printHistoryBody) return;
+    printHistoryBody.replaceChildren();
+    const rows = Array.isArray(history) ? history.slice() : [];
+    rows.sort((left, right) => timestamp(right.created_at) - timestamp(left.created_at));
+    if (rows.length === 0) {
+      setPrintHistoryMessage('История печати пока пустая.', '');
+      return;
+    }
+    rows.forEach((item) => {
+      const tr = document.createElement('tr');
+      appendTextCell(tr, formatDateTime(item.created_at));
+      appendTextCell(tr, item.size || '');
+      appendTextCell(tr, item.gtin || '');
+      appendTextCell(tr, item.quantity || '');
+      appendTextCell(tr, item.template || '');
+      appendTextCell(tr, item.error || item.status || '', item.error ? 'error' : '');
+      appendPrintPdfCell(tr, item);
+      printHistoryBody.appendChild(tr);
+    });
+  }
+
   function appendTextCell(tr, value, kind = '') {
     const td = document.createElement('td');
     td.className = `template-cell${kind === 'error' ? ' order-status-cell error' : ''}`;
@@ -770,6 +932,22 @@
     tr.appendChild(td);
   }
 
+  function appendPrintPdfCell(tr, item) {
+    const td = document.createElement('td');
+    td.className = 'template-cell';
+    if (item.download_url) {
+      const link = document.createElement('a');
+      link.href = item.download_url;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = item.file_name || 'PDF';
+      td.appendChild(link);
+    } else {
+      td.textContent = '-';
+    }
+    tr.appendChild(td);
+  }
+
   function findOperation(item, kind) {
     const operations = Array.isArray(item.operations) ? item.operations : [];
     return operations.find((operation) => operation.kind === kind);
@@ -779,6 +957,12 @@
     if (!orderHistoryMessage) return;
     orderHistoryMessage.textContent = message || '';
     orderHistoryMessage.className = `order-run-status ${kind || ''}`.trim();
+  }
+
+  function setPrintHistoryMessage(message, kind) {
+    if (!printHistoryMessage) return;
+    printHistoryMessage.textContent = message || '';
+    printHistoryMessage.className = `order-run-status ${kind || ''}`.trim();
   }
 
   function timestamp(value) {
@@ -941,6 +1125,12 @@
     if (!markOrderStatus) return;
     markOrderStatus.textContent = message || '';
     markOrderStatus.className = `order-run-status ${kind || ''}`.trim();
+  }
+
+  function setPrintLabelStatus(message, kind) {
+    if (!printLabelStatus) return;
+    printLabelStatus.textContent = message || '';
+    printLabelStatus.className = `order-run-status ${kind || ''}`.trim();
   }
 
   function requestSaveMapping() {
