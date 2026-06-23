@@ -109,6 +109,10 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertNotIn("mark-order-initial-state", page.text)
             self.assertNotIn("hydrateInitialMarkOrderState", page.text)
             self.assertIn('data-gtin-field="gtin"', page.text)
+            self.assertIn('data-gtin-field="full_name"', page.text)
+            self.assertNotIn('data-gtin-field="product_type"', page.text)
+            self.assertIn("Полное наименование", page.text)
+            self.assertNotIn('<th class="teksher-head">Вид товара</th>', page.text)
             self.assertIn('data-gtin-field="tnved"', page.text)
             self.assertIn('data-gtin-field="target_gender"', page.text)
             self.assertIn('data-wb-product-type="Костюмы спортивные"', page.text)
@@ -1227,6 +1231,9 @@ class FakeTeksherMappingService:
             rows.append(
                 replace(
                     row,
+                    full_name=source.get("full_name", "") or saved.get("full_name", "") or _full_name_from_product_type(
+                        saved.get("product_type", "")
+                    ),
                     teksher_size=source.get("teksher_size", ""),
                     product_type=source.get("product_type", ""),
                     gtin=source.get("gtin", "") or saved.get("gtin", ""),
@@ -1375,6 +1382,13 @@ def _build_gtin_upload_workbook(variety: str) -> bytes:
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()
+
+
+def _full_name_from_product_type(value) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    return text[:1].upper() + text[1:]
 
 
 def _session_cookie(payload: dict[str, str], secret_key: str) -> str:

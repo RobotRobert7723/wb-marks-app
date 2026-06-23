@@ -41,6 +41,7 @@ class ProductCardMappingRow:
     ready_to_mark: int
     print_count: int
     order_count: int
+    full_name: str = ""
 
 
 @dataclass(frozen=True, slots=True)

@@ -467,6 +467,13 @@ class TeksherService:
     def _product_mapping_row(self, product: dict, config: AppConfig) -> dict:
         attributes = self._product_attributes(product, config)
         return {
+            "full_name": self._text(
+                product.get("fullName")
+                or product.get("full_name")
+                or product.get("productFullName")
+                or product.get("name")
+                or product.get("title")
+            ),
             "teksher_size": self._attribute_value_by_spec(
                 attributes,
                 {"35"},

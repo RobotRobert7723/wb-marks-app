@@ -18,6 +18,7 @@ def test_apply_latest_clears_green_fields_when_mapping_is_empty() -> None:
     assert mapped_card.mapping_version == 0
     assert mapped_card.rows[0].barcode == "2049271462689"
     assert mapped_card.rows[0].wb_size == "38"
+    assert mapped_card.rows[0].full_name == ""
     assert mapped_card.rows[0].teksher_size == ""
     assert mapped_card.rows[0].product_type == ""
     assert mapped_card.rows[0].gtin == ""
@@ -66,6 +67,7 @@ def test_save_version_and_apply_latest_mapping() -> None:
     assert saved_rows[0]["full_name"] == "Костюм спортивный"
     assert mapped_card.has_teksher_mapping is True
     assert mapped_card.mapping_version == 1
+    assert mapped_card.rows[0].full_name == "Костюм спортивный"
     assert mapped_card.rows[0].gtin == "04709055620626"
     assert mapped_card.rows[0].product_type == "КОСТЮМ СПОРТИВНЫЙ"
     assert mapped_card.rows[0].color == "БЕЛЫЙ"
@@ -125,6 +127,7 @@ def test_apply_latest_uses_teksher_data_when_provided() -> None:
         )
 
     assert mapped_card.has_teksher_mapping is True
+    assert mapped_card.rows[0].full_name == "Stale product"
     assert mapped_card.rows[0].gtin == "04709055620626"
     assert mapped_card.rows[0].product_type == "ДАННЫЕ ИЗ ТЕКШЕР"
     assert mapped_card.rows[0].color == "БЕЛЫЙ"
@@ -245,10 +248,13 @@ def test_partial_update_preserves_previous_size_rows() -> None:
     rows_payload = {row["wb_size"]: row for row in saved_rows}
     assert saved_version == 2
     assert rows_payload["38"]["full_name"] == "Костюм спортивный"
+    assert rows_payload["40"]["full_name"] == "Костюм спортивный обновленный"
     rows = {row.wb_size: row for row in mapped_card.rows}
     assert mapped_card.mapping_version == 2
+    assert rows["38"].full_name == "Костюм спортивный"
     assert rows["38"].gtin == "GTIN-38-OLD"
     assert rows["38"].product_type == "КОСТЮМ СПОРТИВНЫЙ"
+    assert rows["40"].full_name == "Костюм спортивный обновленный"
     assert rows["40"].gtin == "GTIN-40-NEW"
     assert rows["40"].product_type == "КОСТЮМ СПОРТИВНЫЙ ОБНОВЛЕННЫЙ"
 

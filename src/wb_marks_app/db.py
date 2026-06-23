@@ -90,6 +90,14 @@ def _run_runtime_migrations(engine, schema: str) -> None:
             conn.execute(text(f'ALTER TABLE {table_name_runs} ADD COLUMN user_id VARCHAR(36)'))
         if "full_name" not in mapping_columns:
             conn.execute(text(f'ALTER TABLE {table_name_mapping} ADD COLUMN full_name TEXT DEFAULT \'\''))
+        conn.execute(
+            text(
+                f"UPDATE {table_name_mapping} "
+                "SET full_name = 'Костюм спортивный' "
+                "WHERE COALESCE(full_name, '') = '' "
+                "AND UPPER(product_type) = 'КОСТЮМ СПОРТИВНЫЙ'"
+            )
+        )
 
 
 def _qualified_table_name(name: str, schema: str) -> str:

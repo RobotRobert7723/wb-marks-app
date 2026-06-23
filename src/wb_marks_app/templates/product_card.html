@@ -400,7 +400,7 @@
           <col style="width: 70px;" />
           <col style="width: 95px;" />
           <col style="width: 170px;" />
-          <col style="width: 175px;" />
+          <col style="width: 190px;" />
           <col style="width: 130px;" />
           <col style="width: 120px;" />
           <col style="width: 115px;" />
@@ -416,7 +416,7 @@
             <th class="api-head">Размер</th>
             <th class="api-head">Рос. размер</th>
             <th class="teksher-head">Размер</th>
-            <th class="teksher-head">Вид товара</th>
+            <th class="teksher-head">Полное наименование</th>
             <th class="teksher-head">GTIN</th>
             <th class="teksher-head">ТНВЭД</th>
             <th class="teksher-head">Страна</th>
@@ -429,12 +429,12 @@
         </thead>
         <tbody>
           {% for row in product_card.rows %}
-          <tr data-wb-size="{{ row.wb_size }}" data-wb-barcode="{{ row.barcode }}" data-wb-ru-size="{{ row.ru_size }}">
+          <tr data-wb-size="{{ row.wb_size }}" data-wb-barcode="{{ row.barcode }}" data-wb-ru-size="{{ row.ru_size }}" data-product-type="{{ row.product_type }}">
             <td class="api-cell" title="{{ row.barcode }}">{{ row.barcode }}</td>
             <td class="api-cell" title="{{ row.wb_size }}">{{ row.wb_size }}</td>
             <td class="api-cell" title="{{ row.ru_size }}">{{ row.ru_size }}</td>
             <td class="teksher-cell" data-gtin-field="teksher_size" title="{{ row.teksher_size }}">{{ row.teksher_size }}</td>
-            <td class="teksher-cell" data-gtin-field="product_type" title="{{ row.product_type }}">{{ row.product_type }}</td>
+            <td class="teksher-cell" data-gtin-field="full_name" title="{{ row.full_name }}">{{ row.full_name }}</td>
             <td class="teksher-cell" data-gtin-field="gtin" title="{{ row.gtin }}">{{ row.gtin }}</td>
             <td class="teksher-cell" data-gtin-field="tnved" title="{{ row.tnved }}">{{ row.tnved }}</td>
             <td class="teksher-cell" data-gtin-field="country" title="{{ row.country }}">{{ row.country }}</td>
@@ -1345,6 +1345,7 @@
         wb_barcode: tr.dataset.wbBarcode || '',
         wb_size: tr.dataset.wbSize || '',
         wb_ru_size: tr.dataset.wbRuSize || '',
+        product_type: tr.dataset.productType || '',
       };
       tr.querySelectorAll('[data-gtin-field]').forEach((cell) => {
         row[cell.dataset.gtinField] = cell.textContent.trim();
@@ -1359,7 +1360,7 @@
       tnved: 'tnved',
       country: 'country',
       trademark: 'trademark',
-      product_type: 'product_type',
+      full_name: 'full_name',
       vendor_article: 'vendor_article',
       composition: 'composition',
       color: 'color',
@@ -1367,6 +1368,7 @@
     };
     document.querySelectorAll('tr[data-wb-size]').forEach((tr) => {
       if (!tr.querySelector('[data-gtin-field="gtin"].gtin-loaded')) return;
+      if (fields.product_type) tr.dataset.productType = fields.product_type;
       Object.entries(tableFieldMap).forEach(([draftKey, cellKey]) => {
         if (!fields[draftKey]) return;
         setLoadedCell(tr, cellKey, fields[draftKey]);
@@ -1394,8 +1396,10 @@
     document.querySelectorAll('tr[data-wb-size]').forEach((tr) => {
       const row = bySize.get(normalize(tr.dataset.wbSize || ''));
       if (!row) return;
+      const productType = (row.functional_name || '').toUpperCase();
+      tr.dataset.productType = productType;
       setLoadedCell(tr, 'teksher_size', row.size ? `${row.size} МЕЖДУНАРОДНЫЙ` : '');
-      setLoadedCell(tr, 'product_type', (row.functional_name || '').toUpperCase(), row.functional_name || '', wbCompare.product_type);
+      setLoadedCell(tr, 'full_name', productFullNameFrom(row.functional_name), row.functional_name || '', wbCompare.product_type);
       setLoadedCell(tr, 'gtin', row.gtin || '');
       setLoadedCell(tr, 'tnved', wbDefaults.tnved);
       setLoadedCell(tr, 'country', wbDefaults.country);
@@ -1408,6 +1412,9 @@
   }
 
   function clearGtinTable() {
+    document.querySelectorAll('tr[data-wb-size]').forEach((tr) => {
+      tr.dataset.productType = '';
+    });
     document.querySelectorAll('[data-gtin-field]').forEach((cell) => {
       cell.textContent = '';
       cell.title = '';
@@ -1470,6 +1477,12 @@
       .replace(/\s+/g, ' ')
       .trim()
       .toLowerCase();
+  }
+
+  function productFullNameFrom(value) {
+    const text = String(value || '').trim().toLowerCase();
+    if (!text) return '';
+    return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
   }
 
   function targetGenderFromWb(value) {

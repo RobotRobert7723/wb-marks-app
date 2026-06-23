@@ -10,6 +10,7 @@ from wb_marks_app.services.product_cards import ProductCardMappingRow, ProductCa
 
 
 TEKSHER_FIELDS = (
+    "full_name",
     "teksher_size",
     "product_type",
     "gtin",
@@ -83,6 +84,7 @@ class TeksherMappingService:
             rows.append(
                 replace(
                     wb_row,
+                    full_name=fields["full_name"],
                     teksher_size=fields["teksher_size"],
                     product_type=fields["product_type"],
                     gtin=fields["gtin"],
@@ -208,7 +210,8 @@ class TeksherMappingService:
             wb_barcode=self._text(payload.get("wb_barcode")) or (wb_row.barcode if wb_row else ""),
             wb_size=self._text(payload.get("wb_size")) or (wb_row.wb_size if wb_row else ""),
             wb_ru_size=self._text(payload.get("wb_ru_size")) or (wb_row.ru_size if wb_row else ""),
-            full_name=self._text(payload.get("full_name")),
+            full_name=self._text(payload.get("full_name"))
+            or self._full_name_from_product_type(payload.get("product_type")),
             teksher_size=self._text(payload.get("teksher_size")),
             product_type=self._text(payload.get("product_type")),
             gtin=self._text(payload.get("gtin")),
@@ -234,7 +237,7 @@ class TeksherMappingService:
             "wb_barcode": wb_row.barcode if wb_row else saved.wb_barcode,
             "wb_size": wb_row.wb_size if wb_row else saved.wb_size,
             "wb_ru_size": wb_row.ru_size if wb_row else saved.wb_ru_size,
-            "full_name": saved.full_name,
+            "full_name": saved.full_name or self._full_name_from_product_type(saved.product_type),
             "teksher_size": saved.teksher_size,
             "product_type": saved.product_type,
             "gtin": saved.gtin,
@@ -253,7 +256,7 @@ class TeksherMappingService:
             "wb_barcode": saved.wb_barcode,
             "wb_size": saved.wb_size,
             "wb_ru_size": saved.wb_ru_size,
-            "full_name": saved.full_name,
+            "full_name": saved.full_name or self._full_name_from_product_type(saved.product_type),
             "teksher_size": saved.teksher_size,
             "product_type": saved.product_type,
             "gtin": saved.gtin,
@@ -274,6 +277,11 @@ class TeksherMappingService:
             source = teksher_rows_by_gtin.get(saved_gtin, {})
 
         fields = {field: self._text(source.get(field)) for field in TEKSHER_FIELDS}
+        fields["full_name"] = (
+            fields["full_name"]
+            or self._text(saved.get("full_name"))
+            or self._full_name_from_product_type(saved.get("product_type"))
+        )
         fields["gtin"] = fields["gtin"] or saved_gtin
         return fields
 
@@ -283,6 +291,7 @@ class TeksherMappingService:
     def _clear_teksher_fields(self, row: ProductCardMappingRow) -> ProductCardMappingRow:
         return replace(
             row,
+            full_name="",
             teksher_size="",
             product_type="",
             gtin="",
@@ -304,6 +313,12 @@ class TeksherMappingService:
     def _target_gender_from_wb(self, value: str) -> str:
         text = self._text(value)
         return TARGET_GENDER_MAP.get(text.casefold(), text)
+
+    def _full_name_from_product_type(self, value) -> str:
+        text = self._text(value).lower()
+        if not text:
+            return ""
+        return text[:1].upper() + text[1:]
 
     def _text(self, value) -> str:
         return str(value or "").strip()

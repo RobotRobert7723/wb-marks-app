@@ -771,6 +771,7 @@ class TeksherServiceTests(unittest.TestCase):
         rows = service.product_mapping_rows_by_gtins(["04709055620626"], config)
 
         row = rows["04709055620626"]
+        self.assertEqual("Костюм спортивный", row["full_name"])
         self.assertEqual("38 МЕЖДУНАРОДНЫЙ", row["teksher_size"])
         self.assertEqual("КОСТЮМ СПОРТИВНЫЙ", row["product_type"])
         self.assertEqual("6112120000", row["tnved"])
