@@ -61,7 +61,7 @@ def _config_from_env() -> AppConfig:
         teksher_username=os.getenv("TEKSHER_USERNAME", "").strip(),
         teksher_password=os.getenv("TEKSHER_PASSWORD", "").strip(),
         teksher_extension=os.getenv("TEKSHER_EXTENSION", "lp").strip() or "lp",
-        teksher_country_id=int(os.getenv("TEKSHER_COUNTRY_ID", "199")),
+        teksher_country_id=int(os.getenv("TEKSHER_COUNTRY_ID", "242")),
         teksher_transgran_country_code=os.getenv("TEKSHER_TRANSGRAN_COUNTRY_CODE", "RU").strip() or "RU",
         teksher_transgran_recipient_name=os.getenv("TEKSHER_TRANSGRAN_RECIPIENT_NAME", "").strip(),
         teksher_transgran_recipient_inn=os.getenv("TEKSHER_TRANSGRAN_RECIPIENT_INN", "").strip(),

@@ -218,7 +218,7 @@ class FakeSessionProducts(FakeSession):
                         "fullName": "Костюм спортивный",
                         "trademark": "ErLine",
                         "tnved": {"id": 999, "code": "6112120000"},
-                        "manufacturedCountry": {"id": 199, "name": "Кыргызстан"},
+                        "manufacturedCountry": {"id": 242, "name": "КЫРГЫЗСТАН"},
                         "attributes": [
                             {"attributeTypeCode": "35", "name": "Размер одежды / изделия", "value": "38 МЕЖДУНАРОДНЫЙ"},
                             {"attributeTypeCode": "12", "name": "Вид товара", "value": "КОСТЮМ СПОРТИВНЫЙ"},
@@ -241,7 +241,13 @@ class FakeSessionProducts(FakeSession):
         if "/facade/api/v1/tnveds" in url:
             return FakeResponse(200, json_data={"data": [{"id": 999, "code": "6112120000"}]})
         if url.endswith("/facade/api/v1/countries"):
-            return FakeResponse(200, json_data={"data": [{"id": 199, "name": "Кыргызстан", "alpha2": "KG"}]})
+            return FakeResponse(
+                200,
+                json_data=[
+                    {"id": 199, "name": "РОССИЯ", "alpha2": "RU"},
+                    {"id": 242, "name": "КЫРГЫЗСТАН", "alpha2": "KG"},
+                ],
+            )
         return super().get(url, headers=headers, timeout=timeout)
 
     def post(self, url, headers=None, json=None, files=None, timeout=None):
@@ -529,7 +535,7 @@ class TeksherServiceTests(unittest.TestCase):
                     "product_type": "КОСТЮМ СПОРТИВНЫЙ",
                     "gtin": "04709055620626",
                     "tnved": "6112120000",
-                    "country": "Кыргызстан",
+                    "country": "Киргизия",
                     "color": "БЕЛЫЙ",
                     "composition": "полиэстер 100%",
                     "trademark": "ErLine",
@@ -584,7 +590,7 @@ class TeksherServiceTests(unittest.TestCase):
         self.assertEqual("12345678901234", payload["manufacturerInn"])
         self.assertEqual("470905562", payload["gcp"])
         self.assertEqual("4709055620008", payload["gln"])
-        self.assertEqual(199, payload["manufacturedCountryId"])
+        self.assertEqual(242, payload["manufacturedCountryId"])
         self.assertEqual(999, payload["tnved"])
         self.assertEqual("ErLine", payload["trademark"])
         self.assertNotIn("isImport", payload)
@@ -672,7 +678,7 @@ class TeksherServiceTests(unittest.TestCase):
         self.assertEqual("38 МЕЖДУНАРОДНЫЙ", row["teksher_size"])
         self.assertEqual("КОСТЮМ СПОРТИВНЫЙ", row["product_type"])
         self.assertEqual("6112120000", row["tnved"])
-        self.assertEqual("Кыргызстан", row["country"])
+        self.assertEqual("КЫРГЫЗСТАН", row["country"])
         self.assertEqual("cv_nk_white_smr", row["vendor_article"])
         self.assertEqual("БЕЛЫЙ", row["color"])
         self.assertEqual("полиэстер 100%", row["composition"])

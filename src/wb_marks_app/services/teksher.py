@@ -41,6 +41,7 @@ Logger = Callable[[str], None]
 
 TEKSHER_EXISTING_PRODUCT_MESSAGE = "В Текшер уже есть карточка с этим GTIN, данные НЕ СОХРАНЕНЫ"
 TEKSHER_DEFAULT_GCP_LENGTH = 9
+TEKSHER_KYRGYZSTAN_COUNTRY_ID = 242
 TEKSHER_SIZE_UNIT_INTERNATIONAL = "\u041c\u0415\u0416\u0414\u0423\u041d\u0410\u0420\u041e\u0414\u041d\u042b\u0419"
 TEKSHER_VENDOR_ARTICLE_UNIT = "\u0410\u0440\u0442\u0438\u043a\u0443\u043b"
 TEKSHER_CLOTHING_REGULATION = (
@@ -820,24 +821,30 @@ class TeksherService:
 
     def _resolve_country_id(self, value: str, config: AppConfig) -> int:
         country = self._text(value)
-        try:
-            return self._dictionary_id(
-                country,
-                self._dictionary_items("/facade/api/v1/countries", config),
-                ("name", "nameRu", "shortName", "title", "label", "code", "alpha2", "alpha3", "countryCode"),
-                "страну производства",
-            )
-        except AppError:
-            if self._normalize_match(country) in {
+        items = self._dictionary_items("/facade/api/v1/countries", config)
+        keys = ("name", "nameRu", "shortName", "title", "label", "code", "alpha2", "alpha3", "countryCode")
+        if self._is_kyrgyzstan_country(country):
+            for alias in ("KG", "КЫРГЫЗСТАН", "Кыргызстан"):
+                try:
+                    return self._dictionary_id(alias, items, keys, "страну производства")
+                except AppError:
+                    pass
+            return TEKSHER_KYRGYZSTAN_COUNTRY_ID
+        return self._dictionary_id(country, items, keys, "страну производства")
+
+    def _is_kyrgyzstan_country(self, value: str) -> bool:
+        normalized = self._normalize_match(value)
+        return normalized in {
+            self._normalize_match(alias)
+            for alias in (
                 "kg",
                 "kyrgyzstan",
-                "kyrgyzrepublic",
+                "kyrgyz republic",
                 "кыргызстан",
                 "киргизия",
-                "киргизскаяреспублика",
-            }:
-                return config.teksher_country_id
-            raise
+                "киргизская республика",
+            )
+        }
 
     def _dictionary_items(self, path: str, config: AppConfig) -> list[dict]:
         cache_key = f"{config.teksher_url.rstrip('/')}{path}"
@@ -849,7 +856,7 @@ class TeksherService:
             timeout=30,
         )
         self._raise_for_status(response)
-        payload = self._json(response)
+        payload = self._json_value(response)
         items = list(self._extract_records(payload))
         self._dictionary_cache[cache_key] = items
         return items
@@ -1359,14 +1366,17 @@ class TeksherService:
     def _url(self, config: AppConfig, path: str) -> str:
         return f"{config.teksher_url.rstrip('/')}{path}"
 
-    def _json(self, response: requests.Response) -> dict:
+    def _json_value(self, response: requests.Response) -> object:
         try:
-            payload = response.json()
+            return response.json()
         except ValueError as exc:
             body = response.text.strip()
             if body:
                 raise AppError(f"Teksher API returned a non-JSON response: {response.status_code} {body[:500]}") from exc
             raise AppError(f"Teksher API returned an empty response: {response.status_code}") from exc
+
+    def _json(self, response: requests.Response) -> dict:
+        payload = self._json_value(response)
         if not isinstance(payload, dict):
             raise AppError(f"Unexpected Teksher response: {payload!r}")
         return payload

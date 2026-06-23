@@ -34,7 +34,7 @@ class AppConfig:
     teksher_username: str = ""
     teksher_password: str = ""
     teksher_extension: str = "lp"
-    teksher_country_id: int = 199
+    teksher_country_id: int = 242
     teksher_transgran_country_code: str = "RU"
     teksher_transgran_recipient_name: str = ""
     teksher_transgran_recipient_inn: str = ""
