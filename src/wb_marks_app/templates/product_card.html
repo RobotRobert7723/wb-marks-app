@@ -48,6 +48,14 @@
     padding: 7px 10px;
     width: 160px;
   }
+  .print-actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 14px;
+  }
+  .print-actions .label-template-control { margin: 0; }
   .upload-status { font-weight: 700; margin-top: 12px; }
   .upload-status.error { color: #b42318; }
   .upload-status.success { color: #3f6212; }
@@ -293,14 +301,6 @@
         </div>
         <p class="muted">Адрес страницы содержит артикул WB: <code>/product-cards/{{ product_card.wb_article }}</code></p>
         <p class="muted">{{ product_card.api_status }}</p>
-        <div class="label-template-control">
-          <label for="label-template-select">Шаблон печати</label>
-          <select id="label-template-select">
-            <option value="srad" selected>SRad</option>
-            <option value="simple">Simple</option>
-            <option value="medium">Medium</option>
-          </select>
-        </div>
         <div class="product-actions">
           <button type="button" id="gtin-upload-button">Загрузить GTIN</button>
           <input id="gtin-upload-input" type="file" accept=".xlsx,.xlsm" hidden />
@@ -541,9 +541,17 @@
           </tbody>
         </table>
       </div>
-      <div class="actions" style="margin-top: 14px;">
+      <div class="print-actions">
         <button type="button" class="secondary" id="print-labels-button">Напечатать этикетки</button>
         <button type="button" class="secondary" id="print-history-button">История печати</button>
+        <div class="label-template-control">
+          <label for="label-template-select">Шаблон печати</label>
+          <select id="label-template-select">
+            <option value="srad" selected>SRad</option>
+            <option value="simple">Simple</option>
+            <option value="medium">Medium</option>
+          </select>
+        </div>
       </div>
       <div id="print-label-status" class="order-run-status" role="status" aria-live="polite"></div>
     </div>
