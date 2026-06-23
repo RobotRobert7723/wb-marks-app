@@ -60,6 +60,7 @@
     padding: 7px 8px;
     overflow: hidden;
     text-overflow: ellipsis;
+    vertical-align: middle;
     white-space: nowrap;
   }
   .mapping-table th { color: white; font-weight: 700; }
@@ -77,6 +78,12 @@
   .wb-teksher-table { min-width: 1660px; }
   .print-table { min-width: 680px; width: 680px; }
   .order-table { min-width: 460px; width: 460px; }
+  .print-table th,
+  .print-table td,
+  .order-table th,
+  .order-table td {
+    height: 45px;
+  }
   .order-count-input {
     border: 1px solid #cfd4dc;
     border-radius: 6px;
@@ -372,7 +379,6 @@
     <div class="card">
       <div class="section-title">
         <h2>Заказ ЧЗ в Текшер</h2>
-        <span class="source-chip template">UI шаблон</span>
       </div>
       <div class="table-scroll compact-scroll">
         <table class="mapping-table order-table">
@@ -416,7 +422,6 @@
     <div class="card">
       <div class="section-title">
         <h2>Печать этикеток</h2>
-        <span class="source-chip template">UI шаблон</span>
       </div>
       <div class="table-scroll compact-scroll">
         <table class="mapping-table print-table">

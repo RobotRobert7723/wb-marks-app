@@ -125,7 +125,7 @@ class ProductCardTemplateService:
         return ProductCardTemplate(
             wb_article=wb_article,
             image_url=self._image_url(card),
-            api_status=f"Данные WB загружены из Content API для артикула {wb_article}. Поля Текшер пока остаются UI-шаблоном.",
+            api_status=f"Данные WB загружены из Content API для артикула {wb_article}.",
             wb_summary=summary,
             rows=rows,
         )
