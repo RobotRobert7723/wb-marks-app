@@ -65,6 +65,7 @@
   }
   .mapping-table th { color: white; font-weight: 700; }
   .mapping-table .ready-print-head { text-align: left; }
+  .mapping-table .ready-print-cell { text-align: left; }
   .mapping-table th:last-child, .mapping-table td:last-child { border-right: 0; }
   .mapping-table .api-head { background: #838383; }
   .mapping-table .teksher-head { background: #97b958; }
@@ -503,7 +504,7 @@
               <td class="template-cell">{{ row.barcode }}</td>
               <td class="template-cell">{{ row.wb_size }}</td>
               <td class="template-cell">{{ row.ru_size }}</td>
-              <td class="template-cell number" data-ready-print>{{ row.print_count }}</td>
+              <td class="template-cell ready-print-cell" data-ready-print>{{ row.print_count }}</td>
             </tr>
             {% endfor %}
           </tbody>
