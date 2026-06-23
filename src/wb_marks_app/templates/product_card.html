@@ -1,8 +1,10 @@
 {% extends "layout.html" %}
 {% block content %}
 <style>
-  .product-page { display: grid; gap: 20px; }
-  .product-card-header { display: grid; gap: 24px; grid-template-columns: 220px minmax(320px, 1fr); align-items: start; }
+  main { padding: 18px; }
+  main > .product-page > .card { margin-bottom: 16px; padding: 16px; }
+  .product-page { display: grid; gap: 16px; }
+  .product-card-header { display: grid; gap: 18px; grid-template-columns: 200px minmax(300px, 1fr); align-items: start; }
   .product-image {
     align-items: center;
     aspect-ratio: 3 / 4;
@@ -30,7 +32,7 @@
   .source-chip.teksher { background: #edf6df; color: #4d6f18; }
   .source-chip.template { background: #eaf3ff; color: #1c5794; }
   .product-actions { display: flex; flex-wrap: wrap; gap: 12px; }
-  .product-actions .button, .product-actions button { min-width: 160px; text-align: center; }
+  .product-actions .button, .product-actions button { min-width: 145px; padding: 9px 12px; text-align: center; }
   .label-template-control {
     align-items: center;
     display: flex;
@@ -74,7 +76,7 @@
   .mapping-table {
     background: white;
     border-collapse: collapse;
-    font-size: 13px;
+    font-size: 12px;
     line-height: 1.25;
     table-layout: fixed;
     width: 100%;
@@ -82,7 +84,7 @@
   .mapping-table th, .mapping-table td {
     border-bottom: 1px solid #e6e8f0;
     border-right: 1px solid #e6e8f0;
-    padding: 7px 8px;
+    padding: 5px 6px;
     overflow: hidden;
     text-overflow: ellipsis;
     vertical-align: middle;
@@ -101,24 +103,24 @@
   .mapping-table .gtin-loaded { font-weight: 700; }
   .mapping-table .gtin-mismatch { color: #b42318; font-weight: 700; }
   .mapping-table .number { text-align: right; }
-  .wb-summary-table { min-width: 1380px; }
-  .wb-teksher-table { min-width: 1660px; }
-  .print-table { min-width: 520px; width: 100%; }
-  .order-table { min-width: 780px; width: 100%; }
+  .wb-summary-table { min-width: 1210px; width: max-content; }
+  .wb-teksher-table { min-width: 1360px; width: max-content; }
+  .print-table { min-width: 470px; width: max-content; }
+  .order-table { min-width: 620px; width: max-content; }
   .print-table th,
   .print-table td,
   .order-table th,
   .order-table td {
-    height: 32px;
-    padding-bottom: 5px;
-    padding-top: 5px;
+    height: 28px;
+    padding-bottom: 4px;
+    padding-top: 4px;
   }
   .order-count-input {
     border: 1px solid #cfd4dc;
     border-radius: 6px;
     font: inherit;
-    height: 24px;
-    min-height: 24px;
+    height: 22px;
+    min-height: 22px;
     padding: 2px 8px;
     text-align: right;
     width: 100%;
@@ -170,7 +172,7 @@
   .order-history-op strong { display: block; }
   .section-title { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; }
   .section-title h2 { margin: 0; }
-  .split-actions { display: grid; gap: 20px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .split-actions { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .empty-cell { color: #98a2b3; }
   .draft-modal[hidden] { display: none; }
   .draft-modal {
@@ -345,16 +347,16 @@
     <div class="table-scroll">
       <table class="mapping-table wb-summary-table">
         <colgroup>
-          <col style="width: 24%;" />
-          <col style="width: 13%;" />
-          <col style="width: 8%;" />
-          <col style="width: 8%;" />
-          <col style="width: 8%;" />
-          <col style="width: 10%;" />
-          <col style="width: 7%;" />
-          <col style="width: 10%;" />
-          <col style="width: 8%;" />
-          <col style="width: 4%;" />
+          <col style="width: 320px;" />
+          <col style="width: 155px;" />
+          <col style="width: 95px;" />
+          <col style="width: 92px;" />
+          <col style="width: 95px;" />
+          <col style="width: 130px;" />
+          <col style="width: 80px;" />
+          <col style="width: 120px;" />
+          <col style="width: 95px;" />
+          <col style="width: 70px;" />
         </colgroup>
         <thead>
           <tr>
@@ -396,19 +398,19 @@
     <div class="table-scroll">
       <table class="mapping-table wb-teksher-table">
         <colgroup>
-          <col style="width: 140px;" />
-          <col style="width: 70px;" />
-          <col style="width: 95px;" />
+          <col style="width: 118px;" />
+          <col style="width: 58px;" />
+          <col style="width: 78px;" />
+          <col style="width: 62px;" />
+          <col style="width: 155px;" />
+          <col style="width: 118px;" />
+          <col style="width: 96px;" />
+          <col style="width: 105px;" />
+          <col style="width: 112px;" />
+          <col style="width: 82px;" />
+          <col style="width: 112px;" />
           <col style="width: 170px;" />
-          <col style="width: 190px;" />
-          <col style="width: 130px;" />
-          <col style="width: 120px;" />
-          <col style="width: 115px;" />
-          <col style="width: 130px;" />
-          <col style="width: 90px;" />
-          <col style="width: 135px;" />
-          <col style="width: 220px;" />
-          <col style="width: 100px;" />
+          <col style="width: 78px;" />
         </colgroup>
         <thead>
           <tr>
@@ -458,11 +460,11 @@
       <div class="table-scroll compact-scroll">
         <table class="mapping-table order-table">
           <colgroup>
-            <col style="width: 90px;" />
-            <col style="width: 190px;" />
-            <col style="width: 120px;" />
-            <col style="width: 140px;" />
-            <col style="width: 240px;" />
+            <col style="width: 58px;" />
+            <col style="width: 135px;" />
+            <col style="width: 92px;" />
+            <col style="width: 110px;" />
+            <col style="width: 225px;" />
           </colgroup>
           <thead>
             <tr>
@@ -516,10 +518,10 @@
       <div class="table-scroll compact-scroll">
         <table class="mapping-table print-table">
           <colgroup>
-            <col style="width: 155px;" />
-            <col style="width: 70px;" />
-            <col style="width: 95px;" />
-            <col style="width: 155px;" />
+            <col style="width: 135px;" />
+            <col style="width: 58px;" />
+            <col style="width: 78px;" />
+            <col style="width: 130px;" />
           </colgroup>
           <thead>
             <tr>
