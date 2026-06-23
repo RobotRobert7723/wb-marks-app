@@ -360,6 +360,96 @@ class ProductCardRouteTests(unittest.TestCase):
             webapp.settings_to_app_config = old_settings_to_app_config
             webapp.product_card_service = old_product_card_service
 
+    def test_mapping_preview_endpoint_returns_draft_dialog_payload(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from wb_marks_app.models import AppConfig
+        from wb_marks_app.services.product_cards import ProductCardTemplate, ProductCardMappingRow, WbProductSummary
+
+        old_create_all = webapp.create_all
+        old_load_config = webapp.load_config
+        old_session_scope = webapp.session_scope
+        old_get_or_create_settings = webapp.get_or_create_settings
+        old_settings_to_app_config = webapp.settings_to_app_config
+        old_product_card_service = webapp.product_card_service
+        old_teksher_product_service = webapp.teksher_product_service
+        webapp.create_all = lambda: None
+        webapp.load_config = lambda: AppConfig(secret_key="test-secret")
+        webapp.session_scope = lambda: FakeSessionScope()
+        webapp.get_or_create_settings = lambda _session, _user_id: object()
+        webapp.settings_to_app_config = lambda _settings: AppConfig(wb_api_token="token")
+        webapp.teksher_product_service = FakeTeksherProductService(existing_gtins={"04709055620664"})
+        webapp.product_card_service = FakeProductCardService(
+            ProductCardTemplate(
+                wb_article="847012873",
+                image_url="",
+                api_status="",
+                wb_summary=WbProductSummary(
+                    name="Sport suit",
+                    seller_category="Sport suits",
+                    wb_article="847012873",
+                    tnved="6112120000",
+                    country="KG",
+                    seller_article="cv_nk_white_smr",
+                    color="white",
+                    composition="polyester 100%",
+                    gender="boys",
+                    brand="ErLine",
+                ),
+                rows=[
+                    ProductCardMappingRow(
+                        barcode="2049271462689",
+                        wb_size="38",
+                        ru_size="134",
+                        teksher_size="",
+                        product_type="",
+                        gtin="",
+                        tnved="",
+                        country="",
+                        vendor_article="",
+                        color="",
+                        composition="",
+                        target_gender="",
+                        trademark="",
+                        ready_to_mark=0,
+                        print_count=0,
+                        order_count=0,
+                    )
+                ],
+            )
+        )
+        try:
+            app = webapp.create_app()
+            client = TestClient(app)
+            client.cookies.set("wb_marks_session", _session_cookie({"user_id": "user-1", "login": "tester"}, "test-secret"))
+
+            response = client.post(
+                "/api/product-cards/847012873/mapping/preview",
+                json={
+                    "source": "gtin_excel",
+                    "rows": [
+                        {"wb_size": "38", "gtin": "04709055620664"},
+                        {"wb_size": "40", "gtin": "04709055620671"},
+                    ],
+                },
+            )
+
+            self.assertEqual(200, response.status_code)
+            payload = response.json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(["04709055620664"], payload["existing_gtins"])
+            self.assertEqual(["04709055620671"], payload["create_gtins"])
+            self.assertEqual("КЫРГЫЗСТАН", payload["draft_fields"]["country"])
+            self.assertIn({"value": "МУЖСКОЙ", "label": ""}, payload["dictionaries"]["target_gender"])
+            client.close()
+        finally:
+            webapp.create_all = old_create_all
+            webapp.load_config = old_load_config
+            webapp.session_scope = old_session_scope
+            webapp.get_or_create_settings = old_get_or_create_settings
+            webapp.settings_to_app_config = old_settings_to_app_config
+            webapp.product_card_service = old_product_card_service
+            webapp.teksher_product_service = old_teksher_product_service
+
     def test_mapping_save_endpoint_creates_version(self) -> None:
         import wb_marks_app.webapp as webapp
         from wb_marks_app.models import AppConfig
@@ -649,16 +739,81 @@ class FakeTeksherMappingService:
 
 
 class FakeTeksherProductService:
-    def __init__(self, draft_ids=None, existing: bool = False, mapping_rows_by_gtin=None) -> None:
+    def __init__(self, draft_ids=None, existing: bool = False, mapping_rows_by_gtin=None, existing_gtins=None) -> None:
         self.draft_ids = draft_ids or []
         self.existing = existing
         self.mapping_rows_by_gtin = mapping_rows_by_gtin or {}
+        self.existing_gtins = set(existing_gtins or [])
         self.calls = []
         self.gtins = []
 
     def product_mapping_rows_by_gtins(self, gtins, config):
         self.gtins = list(gtins)
         return self.mapping_rows_by_gtin
+
+    def product_draft_preview_for_mapping(self, product_card, rows_payload, config):
+        rows = list(rows_payload)
+        existing_gtins = []
+        create_gtins = []
+        for row in rows:
+            gtin = str(row.get("gtin") or "")
+            if self.existing or gtin in self.existing_gtins:
+                existing_gtins.append(gtin)
+            else:
+                create_gtins.append(gtin)
+        return {
+            "existing_gtins": existing_gtins,
+            "create_gtins": create_gtins,
+            "draft_fields": {
+                "full_name": "Sport suit",
+                "tnved": "6112120000",
+                "country": "КЫРГЫЗСТАН",
+                "manufacturer_inn": "12345678901234",
+                "manufacturer_full_name": "ОсОО ЭрЛайн",
+                "trademark": "ErLine",
+                "product_type": "КОСТЮМ СПОРТИВНЫЙ",
+                "vendor_article": "cv_nk_white_smr",
+                "regulation": "ТР ТС 017/2011",
+                "size_unit": "МЕЖДУНАРОДНЫЙ",
+                "composition": "polyester 100%",
+                "color": "БЕЛЫЙ",
+                "target_gender": "МУЖСКОЙ",
+            },
+            "dictionaries": {
+                "country": [{"value": "КЫРГЫЗСТАН", "label": "KG"}],
+                "target_gender": [{"value": "МУЖСКОЙ", "label": ""}],
+            },
+        }
+
+    def rows_with_product_draft_fields(self, rows_payload, draft_fields):
+        rows = [dict(row) for row in rows_payload]
+        if not isinstance(draft_fields, dict):
+            return rows
+        for row in rows:
+            for key in ("tnved", "country", "product_type", "vendor_article", "color", "composition", "target_gender", "trademark"):
+                if draft_fields.get(key):
+                    row[key] = draft_fields[key]
+        return rows
+
+    def ensure_product_drafts_result_for_mapping(self, product_card, rows_payload, config):
+        draft_ids = self.ensure_product_drafts_for_mapping(product_card, rows_payload, config)
+        if self.existing:
+            return {
+                "draft_ids": [],
+                "created_gtins": [],
+                "existing_gtins": [str(row.get("gtin") or "") for row in rows_payload],
+            }
+        if self.existing_gtins:
+            return {
+                "draft_ids": draft_ids,
+                "created_gtins": [str(row.get("gtin") or "") for row in rows_payload if str(row.get("gtin") or "") not in self.existing_gtins],
+                "existing_gtins": [str(row.get("gtin") or "") for row in rows_payload if str(row.get("gtin") or "") in self.existing_gtins],
+            }
+        return {
+            "draft_ids": draft_ids,
+            "created_gtins": [str(row.get("gtin") or "") for row in rows_payload],
+            "existing_gtins": [],
+        }
 
     def ensure_product_drafts_for_mapping(self, product_card, rows_payload, config):
         self.calls.append(

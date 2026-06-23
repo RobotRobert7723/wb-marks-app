@@ -124,35 +124,127 @@ class TeksherService:
         product_card,
         rows_payload: list[dict],
         config: AppConfig,
+        draft_fields: dict | None = None,
     ) -> list[str]:
+        return self.ensure_product_drafts_result_for_mapping(product_card, rows_payload, config, draft_fields)[
+            "draft_ids"
+        ]
+
+    def ensure_product_drafts_result_for_mapping(
+        self,
+        product_card,
+        rows_payload: list[dict],
+        config: AppConfig,
+        draft_fields: dict | None = None,
+    ) -> dict:
         rows = self._unique_gtin_rows(rows_payload)
         if not rows:
-            return []
+            return {"draft_ids": [], "created_gtins": [], "existing_gtins": []}
 
         self.ensure_authenticated(config)
         rows_to_create: list[dict] = []
+        existing_gtins: list[str] = []
         for row in rows:
             gtin = self._teksher_gtin(row.get("gtin"))
             if self._product_exists_by_gtin(gtin, config):
+                existing_gtins.append(gtin)
                 self.logger(f"Teksher product already exists for GTIN {gtin}; draft creation skipped.")
                 continue
             rows_to_create.append(row)
         if not rows_to_create:
-            return []
+            return {"draft_ids": [], "created_gtins": [], "existing_gtins": existing_gtins}
 
         manufacturer_info = self._manufacturer_create_fields(config)
         draft_ids: list[str] = []
-        for row in rows_to_create:
+        created_gtins: list[str] = []
+        for row in self.rows_with_product_draft_fields(rows_to_create, draft_fields):
             payload = self._product_draft_payload(product_card, row, manufacturer_info, config)
             try:
                 draft_ids.append(self._create_product_draft(payload, config))
+                created_gtins.append(self._text(payload.get("gtin")))
             except AppError as exc:
                 if self._is_existing_product_error(exc):
                     gtin = self._text(payload.get("gtin"))
+                    existing_gtins.append(gtin)
                     self.logger(f"Teksher product already exists for GTIN {gtin}; draft creation skipped.")
                     continue
                 raise
-        return draft_ids
+        return {"draft_ids": draft_ids, "created_gtins": created_gtins, "existing_gtins": existing_gtins}
+
+    def product_draft_preview_for_mapping(
+        self,
+        product_card,
+        rows_payload: list[dict],
+        config: AppConfig,
+    ) -> dict:
+        rows = self._unique_gtin_rows(rows_payload)
+        if not rows:
+            return {
+                "existing_gtins": [],
+                "create_gtins": [],
+                "draft_fields": {},
+                "dictionaries": {},
+            }
+
+        self.ensure_authenticated(config)
+        rows_to_create: list[dict] = []
+        existing_gtins: list[str] = []
+        for row in rows:
+            gtin = self._teksher_gtin(row.get("gtin"))
+            if self._product_exists_by_gtin(gtin, config):
+                existing_gtins.append(gtin)
+            else:
+                rows_to_create.append(row)
+
+        draft_fields: dict[str, str] = {}
+        dictionaries: dict[str, list[dict[str, str]]] = {}
+        if rows_to_create:
+            manufacturer_info = self._manufacturer_create_fields(config)
+            draft_fields = self._product_draft_form_fields(product_card, rows_to_create[0], manufacturer_info, config)
+            dictionaries = self._product_draft_form_dictionaries(draft_fields, config)
+
+        return {
+            "existing_gtins": existing_gtins,
+            "create_gtins": [self._teksher_gtin(row.get("gtin")) for row in rows_to_create],
+            "draft_fields": draft_fields,
+            "dictionaries": dictionaries,
+        }
+
+    def rows_with_product_draft_fields(self, rows_payload: list[dict], draft_fields: dict | None) -> list[dict]:
+        if not isinstance(draft_fields, dict) or not draft_fields:
+            return list(rows_payload)
+        result: list[dict] = []
+        for row in rows_payload:
+            if not isinstance(row, dict):
+                continue
+            merged = dict(row)
+            size_value, current_unit = self._teksher_size_parts(
+                self._text(merged.get("teksher_size")) or self._text(merged.get("wb_size"))
+            )
+            field_map = {
+                "full_name": "full_name",
+                "tnved": "tnved",
+                "country": "country",
+                "manufacturer_inn": "manufacturer_inn",
+                "manufacturer_full_name": "manufacturer_full_name",
+                "trademark": "trademark",
+                "product_type": "product_type",
+                "vendor_article": "vendor_article",
+                "regulation": "regulation",
+                "composition": "composition",
+                "color": "color",
+                "target_gender": "target_gender",
+            }
+            for source_key, target_key in field_map.items():
+                value = self._text(draft_fields.get(source_key))
+                if value:
+                    merged[target_key] = value
+            size_unit = self._text(draft_fields.get("size_unit")) or current_unit
+            if size_value and size_unit:
+                merged["teksher_size"] = f"{size_value} {size_unit}"
+                merged["size_unit"] = size_unit
+            result.append(merged)
+        return result
 
     def product_exists_by_gtin(self, gtin: str, config: AppConfig) -> bool:
         self.ensure_authenticated(config)
@@ -569,7 +661,18 @@ class TeksherService:
         tnved = self._text(row.get("tnved")) or self._text(product_card.wb_summary.tnved)
         country = self._text(row.get("country")) or self._text(product_card.wb_summary.country)
         gtin = self._teksher_gtin(row.get("gtin"))
-        manufacturer = self._manufacturer_fields_for_gtin(manufacturer_info, gtin)
+        manufacturer_source = dict(manufacturer_info)
+        manufacturer_source["manufacturerFullName"] = (
+            self._text(row.get("manufacturer_full_name"))
+            or self._text(row.get("manufacturerFullName"))
+            or self._text(manufacturer_source.get("manufacturerFullName"))
+        )
+        manufacturer_source["manufacturerInn"] = (
+            self._text(row.get("manufacturer_inn"))
+            or self._text(row.get("manufacturerInn"))
+            or self._text(manufacturer_source.get("manufacturerInn"))
+        )
+        manufacturer = self._manufacturer_fields_for_gtin(manufacturer_source, gtin)
         payload = {
             "gtin": gtin,
             "fullName": self._product_full_name(product_card, row),
@@ -583,6 +686,37 @@ class TeksherService:
             "attributes": self._product_draft_attributes(product_card, row),
         }
         return payload
+
+    def _product_draft_form_fields(
+        self,
+        product_card,
+        row: dict,
+        manufacturer_info: dict[str, str],
+        config: AppConfig,
+    ) -> dict[str, str]:
+        gtin = self._teksher_gtin(row.get("gtin"))
+        manufacturer = self._manufacturer_fields_for_gtin(manufacturer_info, gtin)
+        size_value, size_unit = self._teksher_size_parts(
+            self._text(row.get("teksher_size")) or self._text(row.get("wb_size"))
+        )
+        country = self._text(row.get("country")) or self._text(product_card.wb_summary.country)
+        if self._is_kyrgyzstan_country(country):
+            country = "КЫРГЫЗСТАН"
+        return {
+            "full_name": self._product_full_name(product_card, row),
+            "tnved": self._text(row.get("tnved")) or self._text(product_card.wb_summary.tnved),
+            "country": country,
+            "manufacturer_inn": manufacturer["manufacturerInn"],
+            "manufacturer_full_name": manufacturer["manufacturerFullName"],
+            "trademark": self._text(row.get("trademark")) or self._text(product_card.wb_summary.brand),
+            "product_type": self._text(row.get("product_type")) or self._text(product_card.wb_summary.seller_category).upper(),
+            "vendor_article": self._text(row.get("vendor_article")) or self._text(product_card.wb_summary.seller_article),
+            "regulation": self._text(row.get("regulation")) or TEKSHER_CLOTHING_REGULATION,
+            "size_unit": self._text(row.get("size_unit")) or size_unit or TEKSHER_SIZE_UNIT_INTERNATIONAL,
+            "composition": self._text(row.get("composition")) or self._text(product_card.wb_summary.composition),
+            "color": self._text(row.get("color")) or self._text(product_card.wb_summary.color).upper(),
+            "target_gender": self._text(row.get("target_gender")) or self._target_gender_for_create(product_card.wb_summary.gender),
+        }
 
     def _product_full_name(self, product_card, row: dict) -> str:
         full_name = (
@@ -605,14 +739,15 @@ class TeksherService:
         composition = self._text(row.get("composition")) or self._text(product_card.wb_summary.composition)
         target_gender = self._text(row.get("target_gender")) or self._target_gender_for_create(product_card.wb_summary.gender)
         vendor_article = self._text(row.get("vendor_article")) or self._text(product_card.wb_summary.seller_article)
+        regulation = self._text(row.get("regulation")) or TEKSHER_CLOTHING_REGULATION
 
         self._append_product_attribute(attributes, "12", product_type)
-        self._append_product_attribute(attributes, "35", size_value, size_unit)
+        self._append_product_attribute(attributes, "35", size_value, self._text(row.get("size_unit")) or size_unit)
         self._append_product_attribute(attributes, "36", color)
         self._append_product_attribute(attributes, "2483", composition)
         self._append_product_attribute(attributes, "14013", target_gender)
         self._append_product_attribute(attributes, "13914", vendor_article, TEKSHER_VENDOR_ARTICLE_UNIT)
-        self._append_product_attribute(attributes, "13836", TEKSHER_CLOTHING_REGULATION)
+        self._append_product_attribute(attributes, "13836", regulation)
         return attributes
 
     def _append_product_attribute(
@@ -845,6 +980,150 @@ class TeksherService:
                 "киргизская республика",
             )
         }
+
+    def _product_draft_form_dictionaries(self, draft_fields: dict[str, str], config: AppConfig) -> dict[str, list[dict[str, str]]]:
+        options: dict[str, list[dict[str, str]]] = {
+            "tnved": self._safe_tnved_options(draft_fields.get("tnved", ""), config),
+            "country": self._safe_dictionary_options(
+                "/facade/api/v1/countries",
+                ("name", "nameRu", "shortName", "title", "label", "code", "alpha2", "alpha3", "countryCode"),
+                config,
+            ),
+        }
+        attribute_options = self._safe_attribute_template_options(draft_fields.get("tnved", ""), config)
+        options["product_type"] = attribute_options.get("12", [])
+        options["size_unit"] = attribute_options.get("35:unit", [{"value": TEKSHER_SIZE_UNIT_INTERNATIONAL, "label": ""}])
+        options["color"] = attribute_options.get("36", [])
+        options["target_gender"] = attribute_options.get("14013", [])
+        options["regulation"] = attribute_options.get("13836", [{"value": TEKSHER_CLOTHING_REGULATION, "label": ""}])
+        for key, value in draft_fields.items():
+            if key in options:
+                options[key] = self._options_with_current(options[key], value)
+        return options
+
+    def _safe_tnved_options(self, value: str, config: AppConfig) -> list[dict[str, str]]:
+        try:
+            digits = self._digits(value)
+            path = (
+                f"/facade/api/v1/tnveds?page=0&size=10&tnvedCode={quote(digits)}&rootCode="
+                if digits
+                else "/facade/api/v1/tnveds?page=0&size=10&tnvedCode=&rootCode="
+            )
+            return self._tnved_options_from_items(self._dictionary_items(path, config))
+        except AppError:
+            return self._options_with_current([], value)
+
+    def _safe_dictionary_options(
+        self,
+        path: str,
+        value_keys: tuple[str, ...],
+        config: AppConfig,
+    ) -> list[dict[str, str]]:
+        try:
+            return self._dictionary_options_from_items(self._dictionary_items(path, config), value_keys)
+        except AppError:
+            return []
+
+    def _safe_attribute_template_options(self, tnved: str, config: AppConfig) -> dict[str, list[dict[str, str]]]:
+        try:
+            subgroup_id = self._tnved_product_subgroup_id(tnved, config) or "2"
+            response = self.session.get(
+                self._url(config, f"/facade/api/v1/products/attribute_templates?subgroupId={quote(subgroup_id)}"),
+                headers=self._headers(config),
+                timeout=30,
+            )
+            self._raise_for_status(response)
+            payload = self._json_value(response)
+        except AppError:
+            return {}
+
+        result: dict[str, list[dict[str, str]]] = {}
+        templates = payload if isinstance(payload, list) else []
+        for item in templates:
+            if not isinstance(item, dict):
+                continue
+            attribute_type = item.get("attributeType")
+            if not isinstance(attribute_type, dict):
+                continue
+            code = self._text(attribute_type.get("code"))
+            if not code:
+                continue
+            values = attribute_type.get("values")
+            if isinstance(values, list):
+                result[code] = self._plain_value_options(values)
+            unit_codes = attribute_type.get("unitCodes")
+            if isinstance(unit_codes, list):
+                result[f"{code}:unit"] = self._plain_value_options(unit_codes)
+        return result
+
+    def _tnved_product_subgroup_id(self, value: str, config: AppConfig) -> str:
+        digits = self._digits(value)
+        if not digits:
+            return ""
+        items = self._dictionary_items(
+            f"/facade/api/v1/tnveds?page=0&size=10&tnvedCode={quote(digits)}&rootCode=",
+            config,
+        )
+        for item in items:
+            if self._digits(self._first_record_text(item, "code", "tnved", "tnvedCode")) != digits:
+                continue
+            for record in self._walk_dicts(item):
+                if any(self._key_token(str(key)) == "productsubgroup" for key in record.keys()):
+                    subgroup = record.get("productSubgroup") or record.get("product_subgroup")
+                    if isinstance(subgroup, dict):
+                        subgroup_id = self._extract_dict_id(subgroup)
+                        if subgroup_id is not None:
+                            return str(subgroup_id)
+            for record in self._walk_dicts(item):
+                if self._text(record.get("alias")) or self._text(record.get("name")):
+                    subgroup_id = self._extract_dict_id(record)
+                    if subgroup_id is not None and self._text(record.get("code")) in {"01", "02"}:
+                        return str(subgroup_id)
+        return ""
+
+    def _tnved_options_from_items(self, items: list[dict]) -> list[dict[str, str]]:
+        options: list[dict[str, str]] = []
+        for item in items[:50]:
+            code = self._first_record_text(item, "code", "tnved", "tnvedCode", "value")
+            if not code:
+                continue
+            name = self._first_record_text(item, "name", "title", "label")
+            options.append({"value": code, "label": name})
+        return self._dedupe_options(options)
+
+    def _dictionary_options_from_items(self, items: list[dict], value_keys: tuple[str, ...]) -> list[dict[str, str]]:
+        options: list[dict[str, str]] = []
+        for item in items[:700]:
+            values = self._dictionary_value_texts(item, value_keys)
+            value = values[0] if values else self._text(self._extract_dict_id(item))
+            if not value:
+                continue
+            label_values = [entry for entry in values[1:4] if self._normalize_match(entry) != self._normalize_match(value)]
+            options.append({"value": value, "label": " / ".join(label_values)})
+        return self._dedupe_options(options)
+
+    def _plain_value_options(self, values: list) -> list[dict[str, str]]:
+        return self._dedupe_options([{"value": self._text(value), "label": ""} for value in values if self._text(value)])
+
+    def _options_with_current(self, options: list[dict[str, str]], current: str) -> list[dict[str, str]]:
+        text = self._text(current)
+        if not text:
+            return self._dedupe_options(options)
+        return self._dedupe_options([{"value": text, "label": ""}, *options])
+
+    def _dedupe_options(self, options: list[dict[str, str]]) -> list[dict[str, str]]:
+        result: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for option in options:
+            value = self._text(option.get("value"))
+            if not value:
+                continue
+            key = self._normalize_match(value)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append({"value": value, "label": self._text(option.get("label"))})
+        return result
 
     def _dictionary_items(self, path: str, config: AppConfig) -> list[dict]:
         cache_key = f"{config.teksher_url.rstrip('/')}{path}"

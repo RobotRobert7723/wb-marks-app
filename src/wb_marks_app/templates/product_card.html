@@ -81,9 +81,100 @@
   .section-title h2 { margin: 0; }
   .split-actions { display: grid; gap: 20px; grid-template-columns: minmax(520px, 1fr) minmax(360px, .65fr); }
   .empty-cell { color: #98a2b3; }
+  .draft-modal[hidden] { display: none; }
+  .draft-modal {
+    align-items: center;
+    background: rgba(15, 23, 42, .48);
+    display: flex;
+    inset: 0;
+    justify-content: center;
+    padding: 24px;
+    position: fixed;
+    z-index: 40;
+  }
+  .draft-modal-panel {
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 24px 64px rgba(15, 23, 42, .24);
+    max-height: calc(100vh - 48px);
+    max-width: 940px;
+    overflow: auto;
+    padding: 22px;
+    width: min(940px, 100%);
+  }
+  .draft-modal-head {
+    align-items: center;
+    display: flex;
+    gap: 14px;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .draft-modal-head h2 { margin: 0; }
+  .draft-modal-close {
+    align-items: center;
+    background: #eef2f7;
+    border: 0;
+    border-radius: 6px;
+    color: #344054;
+    display: inline-flex;
+    font-size: 20px;
+    height: 36px;
+    justify-content: center;
+    min-width: 36px;
+    padding: 0;
+    width: 36px;
+  }
+  .draft-preview-message {
+    color: #344054;
+    font-weight: 700;
+    margin: 0 0 14px;
+  }
+  .draft-gtins {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .draft-gtins span {
+    background: #eef4ff;
+    border-radius: 999px;
+    color: #294a7a;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 6px 9px;
+  }
+  .draft-form-grid {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(2, minmax(260px, 1fr));
+  }
+  .draft-field { display: grid; gap: 6px; }
+  .draft-field.full { grid-column: 1 / -1; }
+  .draft-field label {
+    color: #344054;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .draft-field input {
+    border: 1px solid #cfd4dc;
+    border-radius: 6px;
+    color: #1d2939;
+    font: inherit;
+    min-height: 38px;
+    padding: 8px 10px;
+    width: 100%;
+  }
+  .draft-modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 18px;
+  }
+  .draft-modal-actions button { min-width: 120px; }
   @media (max-width: 860px) {
     .product-card-header, .split-actions { grid-template-columns: 1fr; }
     .product-image { max-width: 220px; }
+    .draft-form-grid { grid-template-columns: 1fr; }
   }
 </style>
 
@@ -135,6 +226,22 @@
           <button type="button" id="mapping-save-no" class="secondary">Нет</button>
         </div>
         <div id="gtin-upload-status" class="upload-status" role="status" aria-live="polite"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="draft-preview-modal" class="draft-modal" hidden role="dialog" aria-modal="true" aria-labelledby="draft-preview-title">
+    <div class="draft-modal-panel">
+      <div class="draft-modal-head">
+        <h2 id="draft-preview-title">Создание карточек Текшер</h2>
+        <button type="button" id="draft-preview-close" class="draft-modal-close" aria-label="Закрыть">×</button>
+      </div>
+      <p id="draft-preview-message" class="draft-preview-message"></p>
+      <div id="draft-preview-gtins" class="draft-gtins"></div>
+      <form id="draft-preview-form" class="draft-form-grid"></form>
+      <div class="draft-modal-actions">
+        <button type="button" id="draft-preview-cancel" class="secondary">Отмена</button>
+        <button type="button" id="draft-preview-save">Сохранить</button>
       </div>
     </div>
   </div>
@@ -340,9 +447,31 @@
   const saveConfirmBox = document.getElementById('mapping-save-confirm');
   const saveConfirmYes = document.getElementById('mapping-save-yes');
   const saveConfirmNo = document.getElementById('mapping-save-no');
+  const draftModal = document.getElementById('draft-preview-modal');
+  const draftForm = document.getElementById('draft-preview-form');
+  const draftMessage = document.getElementById('draft-preview-message');
+  const draftGtins = document.getElementById('draft-preview-gtins');
+  const draftClose = document.getElementById('draft-preview-close');
+  const draftCancel = document.getElementById('draft-preview-cancel');
+  const draftSave = document.getElementById('draft-preview-save');
   if (!page || !uploadButton || !input || !saveButton || !status) return;
 
   let hasUnsavedGtin = false;
+  const draftFieldDefinitions = [
+    { key: 'full_name', label: 'Полное наименование товара', full: true },
+    { key: 'tnved', label: 'Код ТН ВЭД', dictionary: true },
+    { key: 'country', label: 'Страна производства', dictionary: true },
+    { key: 'manufacturer_inn', label: 'ИНН производителя' },
+    { key: 'manufacturer_full_name', label: 'Полное наименование производителя' },
+    { key: 'trademark', label: 'Товарный знак' },
+    { key: 'product_type', label: 'Вид товара', dictionary: true },
+    { key: 'vendor_article', label: 'Артикул производителя' },
+    { key: 'regulation', label: 'Номер регламента/стандарта', dictionary: true, full: true },
+    { key: 'size_unit', label: 'Тип размера', dictionary: true },
+    { key: 'composition', label: 'Состав' },
+    { key: 'color', label: 'Цвет', dictionary: true },
+    { key: 'target_gender', label: 'Целевой пол', dictionary: true },
+  ];
 
   uploadButton.addEventListener('click', () => {
     if (page.dataset.hasMapping === 'true') {
@@ -361,10 +490,19 @@
     confirmNo.addEventListener('click', () => hideUpdateConfirm());
   }
   if (saveConfirmYes) {
-    saveConfirmYes.addEventListener('click', () => saveMapping());
+    saveConfirmYes.addEventListener('click', () => prepareMappingSave());
   }
   if (saveConfirmNo) {
     saveConfirmNo.addEventListener('click', () => hideSaveConfirm());
+  }
+  if (draftClose) {
+    draftClose.addEventListener('click', () => hideDraftModal());
+  }
+  if (draftCancel) {
+    draftCancel.addEventListener('click', () => hideDraftModal());
+  }
+  if (draftSave) {
+    draftSave.addEventListener('click', () => saveMapping(collectDraftFields()));
   }
   saveButton.addEventListener('click', () => requestSaveMapping());
 
@@ -405,13 +543,47 @@
       showSaveConfirm();
       return;
     }
-    saveMapping();
+    prepareMappingSave();
   }
 
-  async function saveMapping() {
+  async function prepareMappingSave() {
     if (!hasUnsavedGtin) return;
     hideUpdateConfirm();
     hideSaveConfirm();
+    setStatus('Проверяем карточки Текшер...', '');
+    saveButton.disabled = true;
+    uploadButton.disabled = true;
+
+    try {
+      const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/mapping/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: 'gtin_excel', rows: collectMappingRows() }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        setStatus(payload.message || 'Не удалось проверить карточки Текшер.', 'error');
+        return;
+      }
+      if (!Array.isArray(payload.create_gtins) || payload.create_gtins.length === 0) {
+        await saveMapping({});
+        return;
+      }
+      showDraftModal(payload);
+      setStatus('', '');
+    } catch (error) {
+      setStatus('Не удалось проверить карточки Текшер.', 'error');
+    } finally {
+      uploadButton.disabled = false;
+      saveButton.disabled = !hasUnsavedGtin;
+    }
+  }
+
+  async function saveMapping(draftFields = {}) {
+    if (!hasUnsavedGtin) return;
+    hideUpdateConfirm();
+    hideSaveConfirm();
+    setDraftModalBusy(true);
     setStatus('Сохраняем мэппинг...', '');
     saveButton.disabled = true;
     uploadButton.disabled = true;
@@ -420,21 +592,24 @@
       const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/mapping`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: 'gtin_excel', rows: collectMappingRows() }),
+        body: JSON.stringify({ source: 'gtin_excel', rows: collectMappingRows(), draft_fields: draftFields }),
       });
       const payload = await response.json();
       if (!response.ok || !payload.ok) {
         setStatus(payload.message || 'Не удалось сохранить мэппинг.', 'error');
         return;
       }
+      applyDraftFieldsToTable(draftFields);
       markMappingSaved();
       page.dataset.hasMapping = 'true';
       page.dataset.mappingVersion = String(payload.version || '');
       setUnsaved(false);
+      hideDraftModal();
       setStatus(payload.message || 'Мэппинг сохранен.', 'success');
     } catch (error) {
       setStatus('Не удалось сохранить мэппинг.', 'error');
     } finally {
+      setDraftModalBusy(false);
       uploadButton.disabled = false;
       saveButton.disabled = !hasUnsavedGtin;
     }
@@ -460,7 +635,7 @@
 
   function showSaveConfirm() {
     if (!saveConfirmBox) {
-      saveMapping();
+      prepareMappingSave();
       return;
     }
     saveConfirmBox.hidden = false;
@@ -469,6 +644,87 @@
 
   function hideSaveConfirm() {
     if (saveConfirmBox) saveConfirmBox.hidden = true;
+  }
+
+  function showDraftModal(payload) {
+    if (!draftModal || !draftForm || !draftMessage || !draftGtins) {
+      saveMapping(payload.draft_fields || {});
+      return;
+    }
+    const existing = Array.isArray(payload.existing_gtins) ? payload.existing_gtins : [];
+    const create = Array.isArray(payload.create_gtins) ? payload.create_gtins : [];
+    if (existing.length && create.length) {
+      const existingText = existing.length === 1
+        ? `Карточка ${existing[0]} создана ранее`
+        : `Карточки ${existing.join(', ')} созданы ранее`;
+      draftMessage.textContent = `${existingText}, будут созданы карточки для GTIN: ${create.join(', ')}.`;
+    } else {
+      draftMessage.textContent = `Будут созданы карточки для GTIN: ${create.join(', ')}.`;
+    }
+    draftGtins.replaceChildren(...create.map((gtin) => {
+      const item = document.createElement('span');
+      item.textContent = gtin;
+      return item;
+    }));
+    renderDraftFields(payload.draft_fields || {}, payload.dictionaries || {});
+    draftModal.hidden = false;
+    const firstInput = draftForm.querySelector('input');
+    if (firstInput) firstInput.focus();
+  }
+
+  function hideDraftModal() {
+    if (draftModal) draftModal.hidden = true;
+    setDraftModalBusy(false);
+  }
+
+  function renderDraftFields(fields, dictionaries) {
+    if (!draftForm) return;
+    draftForm.innerHTML = '';
+    draftForm.querySelectorAll('datalist').forEach((node) => node.remove());
+    draftFieldDefinitions.forEach((definition) => {
+      const wrapper = document.createElement('div');
+      wrapper.className = `draft-field${definition.full ? ' full' : ''}`;
+      const label = document.createElement('label');
+      label.htmlFor = `draft-field-${definition.key}`;
+      label.textContent = definition.label;
+      const inputElement = document.createElement('input');
+      inputElement.id = `draft-field-${definition.key}`;
+      inputElement.name = definition.key;
+      inputElement.value = fields[definition.key] || '';
+      inputElement.autocomplete = 'off';
+      if (definition.dictionary) {
+        const datalistId = `draft-options-${definition.key}`;
+        inputElement.setAttribute('list', datalistId);
+        const datalist = document.createElement('datalist');
+        datalist.id = datalistId;
+        const options = Array.isArray(dictionaries[definition.key]) ? dictionaries[definition.key] : [];
+        options.forEach((option) => {
+          const optionElement = document.createElement('option');
+          optionElement.value = option.value || '';
+          if (option.label) optionElement.label = option.label;
+          datalist.appendChild(optionElement);
+        });
+        wrapper.appendChild(datalist);
+      }
+      wrapper.append(label, inputElement);
+      draftForm.appendChild(wrapper);
+    });
+  }
+
+  function collectDraftFields() {
+    if (!draftForm) return {};
+    const result = {};
+    draftFieldDefinitions.forEach((definition) => {
+      const inputElement = draftForm.querySelector(`[name="${definition.key}"]`);
+      result[definition.key] = inputElement ? inputElement.value.trim() : '';
+    });
+    return result;
+  }
+
+  function setDraftModalBusy(value) {
+    if (draftSave) draftSave.disabled = value;
+    if (draftCancel) draftCancel.disabled = value;
+    if (draftClose) draftClose.disabled = value;
   }
 
   function setUnsaved(value) {
@@ -489,6 +745,31 @@
         row[cell.dataset.gtinField] = cell.textContent.trim();
       });
       return row;
+    });
+  }
+
+  function applyDraftFieldsToTable(fields) {
+    if (!fields || Object.keys(fields).length === 0) return;
+    const tableFieldMap = {
+      tnved: 'tnved',
+      country: 'country',
+      trademark: 'trademark',
+      product_type: 'product_type',
+      vendor_article: 'vendor_article',
+      composition: 'composition',
+      color: 'color',
+      target_gender: 'target_gender',
+    };
+    document.querySelectorAll('tr[data-wb-size]').forEach((tr) => {
+      if (!tr.querySelector('[data-gtin-field="gtin"].gtin-loaded')) return;
+      Object.entries(tableFieldMap).forEach(([draftKey, cellKey]) => {
+        if (!fields[draftKey]) return;
+        setLoadedCell(tr, cellKey, fields[draftKey]);
+      });
+      if (fields.size_unit) {
+        const sizeValue = tr.dataset.wbSize || cellText(tr, 'teksher_size').split(/\s+/)[0] || '';
+        setLoadedCell(tr, 'teksher_size', `${sizeValue} ${fields.size_unit}`.trim());
+      }
     });
   }
 
@@ -550,6 +831,11 @@
     cell.classList.remove('gtin-loaded', 'gtin-mismatch');
     if (options.loaded) cell.classList.add('gtin-loaded');
     if (options.mismatch) cell.classList.add('gtin-mismatch');
+  }
+
+  function cellText(row, field) {
+    const cell = row.querySelector(`[data-gtin-field="${field}"]`);
+    return cell ? cell.textContent.trim() : '';
   }
 
   function setStatus(message, kind) {

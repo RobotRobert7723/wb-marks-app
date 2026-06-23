@@ -248,6 +248,52 @@ class FakeSessionProducts(FakeSession):
                     {"id": 242, "name": "КЫРГЫЗСТАН", "alpha2": "KG"},
                 ],
             )
+        if "/facade/api/v1/products/attribute_templates" in url:
+            return FakeResponse(
+                200,
+                json_data=[
+                    {
+                        "attributeType": {
+                            "code": "12",
+                            "name": "Вид товара",
+                            "values": ["КОСТЮМ СПОРТИВНЫЙ"],
+                            "unitCodes": [],
+                        }
+                    },
+                    {
+                        "attributeType": {
+                            "code": "35",
+                            "name": "Размер одежды / изделия",
+                            "values": [],
+                            "unitCodes": ["МЕЖДУНАРОДНЫЙ"],
+                        }
+                    },
+                    {
+                        "attributeType": {
+                            "code": "36",
+                            "name": "Цвет",
+                            "values": ["БЕЛЫЙ"],
+                            "unitCodes": [],
+                        }
+                    },
+                    {
+                        "attributeType": {
+                            "code": "14013",
+                            "name": "Целевой пол",
+                            "values": ["МУЖСКОЙ", "ЖЕНСКИЙ", "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)"],
+                            "unitCodes": [],
+                        }
+                    },
+                    {
+                        "attributeType": {
+                            "code": "13836",
+                            "name": "Номер регламента/стандарта",
+                            "values": [TEKSHER_CLOTHING_REGULATION],
+                            "unitCodes": [],
+                        }
+                    },
+                ],
+            )
         return super().get(url, headers=headers, timeout=timeout)
 
     def post(self, url, headers=None, json=None, files=None, timeout=None):
@@ -558,6 +604,48 @@ class TeksherServiceTests(unittest.TestCase):
         self.assertEqual(["draft-1"], draft_ids)
         self.assertEqual(1, len(session.created_payloads))
         self.assertEqual("04709055620633", session.created_payloads[0]["gtin"])
+
+    def test_product_draft_preview_reports_existing_and_missing_gtins(self) -> None:
+        session = FakeSessionProducts(existing_gtins={"04709055620664"})
+        service = TeksherService(browser=FakeBrowser(), session=session, sleep=lambda _: None)
+        config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
+
+        preview = service.product_draft_preview_for_mapping(
+            _product_card(),
+            [
+                {
+                    "wb_size": "38",
+                    "teksher_size": "38 МЕЖДУНАРОДНЫЙ",
+                    "product_type": "КОСТЮМ СПОРТИВНЫЙ",
+                    "gtin": "04709055620664",
+                    "tnved": "6112120000",
+                    "country": "Киргизия",
+                    "color": "БЕЛЫЙ",
+                    "composition": "полиэстер 100%",
+                    "trademark": "ErLine",
+                },
+                {
+                    "wb_size": "40",
+                    "teksher_size": "40 МЕЖДУНАРОДНЫЙ",
+                    "product_type": "КОСТЮМ СПОРТИВНЫЙ",
+                    "gtin": "04709055620671",
+                    "tnved": "6112120000",
+                    "country": "Киргизия",
+                    "color": "БЕЛЫЙ",
+                    "composition": "полиэстер 100%",
+                    "trademark": "ErLine",
+                },
+            ],
+            config,
+        )
+
+        self.assertEqual(["04709055620664"], preview["existing_gtins"])
+        self.assertEqual(["04709055620671"], preview["create_gtins"])
+        self.assertEqual("КЫРГЫЗСТАН", preview["draft_fields"]["country"])
+        self.assertEqual("ОсОО ЭрЛайн", preview["draft_fields"]["manufacturer_full_name"])
+        self.assertEqual("12345678901234", preview["draft_fields"]["manufacturer_inn"])
+        self.assertIn({"value": "КОСТЮМ СПОРТИВНЫЙ", "label": ""}, preview["dictionaries"]["product_type"])
+        self.assertIn({"value": "МЕЖДУНАРОДНЫЙ", "label": ""}, preview["dictionaries"]["size_unit"])
 
     def test_ensure_product_drafts_for_mapping_creates_draft_without_approve(self) -> None:
         session = FakeSessionProducts(existing=False)

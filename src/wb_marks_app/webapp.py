@@ -483,8 +483,8 @@ def create_app() -> FastAPI:
             "rows": [_serialize_gtin_row(row) for row in matched_rows],
         }
 
-    @app.post("/api/product-cards/{wb_article}/mapping")
-    async def save_product_card_mapping(request: Request, wb_article: str):
+    @app.post("/api/product-cards/{wb_article}/mapping/preview")
+    async def preview_product_card_mapping(request: Request, wb_article: str):
         user_id = _user_id_from_session(request)
         if not user_id:
             return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
@@ -501,13 +501,51 @@ def create_app() -> FastAPI:
                 settings = get_or_create_settings(session, user_id)
                 config = settings_to_app_config(settings)
             product_card = product_card_service.build_template(wb_article, config)
-            draft_ids = teksher_product_service.ensure_product_drafts_for_mapping(product_card, rows, config)
+            preview = teksher_product_service.product_draft_preview_for_mapping(product_card, rows, config)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+        except (AppError, ManualStepRequired) as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+
+        return {
+            "ok": True,
+            "existing_gtins": preview.get("existing_gtins", []),
+            "create_gtins": preview.get("create_gtins", []),
+            "draft_fields": preview.get("draft_fields", {}),
+            "dictionaries": preview.get("dictionaries", {}),
+        }
+
+    @app.post("/api/product-cards/{wb_article}/mapping")
+    async def save_product_card_mapping(request: Request, wb_article: str):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        try:
+            payload = await request.json()
+        except ValueError:
+            return JSONResponse({"ok": False, "message": "Некорректный JSON."}, status_code=400)
+        rows = payload.get("rows") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            return JSONResponse({"ok": False, "message": "Нет строк мэппинга для сохранения."}, status_code=400)
+        raw_draft_fields = payload.get("draft_fields") if isinstance(payload, dict) else None
+        draft_fields = raw_draft_fields if isinstance(raw_draft_fields, dict) else {}
+
+        try:
+            with session_scope() as session:
+                settings = get_or_create_settings(session, user_id)
+                config = settings_to_app_config(settings)
+            product_card = product_card_service.build_template(wb_article, config)
+            rows_to_save = teksher_product_service.rows_with_product_draft_fields(rows, draft_fields)
+            draft_result = teksher_product_service.ensure_product_drafts_result_for_mapping(product_card, rows_to_save, config)
+            draft_ids = draft_result.get("draft_ids", [])
+            created_gtins = draft_result.get("created_gtins", [])
+            existing_gtins = draft_result.get("existing_gtins", [])
             with session_scope() as session:
                 version, created = teksher_mapping_service.save_version(
                     session,
                     user_id,
                     product_card,
-                    rows,
+                    rows_to_save,
                     source=str(payload.get("source") or "product_card"),
                 )
         except ValueError as exc:
@@ -519,10 +557,12 @@ def create_app() -> FastAPI:
 
         return {
             "ok": True,
-            "message": f"Мэппинг сохранен: версия {version}, строк {created}.",
+            "message": _product_mapping_save_message(version, created, created_gtins),
             "version": version,
             "rows_saved": created,
             "teksher_draft_ids": draft_ids,
+            "created_gtins": created_gtins,
+            "existing_gtins": existing_gtins,
         }
 
     @app.post("/labels/preview", response_class=HTMLResponse)
@@ -840,6 +880,13 @@ def _serialize_gtin_row(row) -> dict:
         "color": row.color,
         "size": row.size,
     }
+
+
+def _product_mapping_save_message(version: int, rows_saved: int, created_gtins: list[str]) -> str:
+    if created_gtins:
+        gtins = ", ".join(created_gtins)
+        return f"Карточки для GTIN: {gtins} созданы в Текшер. Мэппинг сохранен: версия {version}, строк {rows_saved}."
+    return f"Мэппинг сохранен: версия {version}, строк {rows_saved}. Новые карточки в Текшер не создавались."
 
 
 def _base_context(request: Request, **extra) -> dict:
