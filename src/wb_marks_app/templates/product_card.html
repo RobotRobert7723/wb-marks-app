@@ -76,7 +76,16 @@
   .wb-summary-table { min-width: 1380px; }
   .wb-teksher-table { min-width: 1660px; }
   .print-table { min-width: 680px; width: 680px; }
-  .order-table { min-width: 260px; width: 260px; }
+  .order-table { min-width: 460px; width: 460px; }
+  .order-count-input {
+    border: 1px solid #cfd4dc;
+    border-radius: 6px;
+    font: inherit;
+    min-height: 30px;
+    padding: 5px 8px;
+    text-align: right;
+    width: 100%;
+  }
   .section-title { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; }
   .section-title h2 { margin: 0; }
   .split-actions { display: grid; gap: 20px; grid-template-columns: minmax(520px, 1fr) minmax(360px, .65fr); }
@@ -362,6 +371,50 @@
   <div class="split-actions">
     <div class="card">
       <div class="section-title">
+        <h2>Заказ ЧЗ в Текшер</h2>
+        <span class="source-chip template">UI шаблон</span>
+      </div>
+      <div class="table-scroll compact-scroll">
+        <table class="mapping-table order-table">
+          <colgroup>
+            <col style="width: 90px;" />
+            <col style="width: 190px;" />
+            <col style="width: 140px;" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="template-head">Размер</th>
+              <th class="template-head">GTIN</th>
+              <th class="template-head">Заказать</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in product_card.rows %}
+            <tr data-order-row-size="{{ row.wb_size }}">
+              <td class="template-cell">{{ row.wb_size }}</td>
+              <td class="template-cell" data-order-gtin title="{{ row.gtin }}">{{ row.gtin }}</td>
+              <td class="template-cell number">
+                <input
+                  class="order-count-input"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value="{{ row.order_count }}"
+                  aria-label="Заказать размер {{ row.wb_size }}"
+                />
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="actions" style="margin-top: 14px;">
+        <button type="button" class="secondary">Заказать ЧЗ в Текшер</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">
         <h2>Печать этикеток</h2>
         <span class="source-chip template">UI шаблон</span>
       </div>
@@ -398,38 +451,6 @@
       </div>
       <div class="actions" style="margin-top: 14px;">
         <button type="button" class="secondary">Напечатать этикетки</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-title">
-        <h2>Заказ в Текшер</h2>
-        <span class="source-chip template">UI шаблон</span>
-      </div>
-      <div class="table-scroll compact-scroll">
-        <table class="mapping-table order-table">
-          <colgroup>
-            <col style="width: 120px;" />
-            <col style="width: 140px;" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th class="template-head">Размер</th>
-              <th class="template-head">Заказать</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for row in product_card.rows %}
-            <tr>
-              <td class="template-cell">{{ row.wb_size }}</td>
-              <td class="template-cell number">{{ row.order_count }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      <div class="actions" style="margin-top: 14px;">
-        <button type="button" class="secondary">Заказать в Текшер</button>
       </div>
     </div>
   </div>
@@ -831,6 +852,17 @@
     cell.classList.remove('gtin-loaded', 'gtin-mismatch');
     if (options.loaded) cell.classList.add('gtin-loaded');
     if (options.mismatch) cell.classList.add('gtin-mismatch');
+    if (field === 'gtin') updateOrderGtin(row.dataset.wbSize || '', value || '');
+  }
+
+  function updateOrderGtin(wbSize, gtin) {
+    document.querySelectorAll('[data-order-row-size]').forEach((row) => {
+      if (normalize(row.dataset.orderRowSize || '') !== normalize(wbSize)) return;
+      const cell = row.querySelector('[data-order-gtin]');
+      if (!cell) return;
+      cell.textContent = gtin;
+      cell.title = gtin;
+    });
   }
 
   function cellText(row, field) {
