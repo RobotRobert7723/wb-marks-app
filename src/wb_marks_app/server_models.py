@@ -174,6 +174,7 @@ class TeksherMappingModel(Base):
     wb_size: Mapped[str] = mapped_column(String(64), default="")
     wb_ru_size: Mapped[str] = mapped_column(String(64), default="")
 
+    full_name: Mapped[str] = mapped_column(Text, default="")
     teksher_size: Mapped[str] = mapped_column(String(255), default="")
     product_type: Mapped[str] = mapped_column(Text, default="")
     gtin: Mapped[str] = mapped_column(String(64), default="")

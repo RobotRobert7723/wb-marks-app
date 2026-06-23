@@ -1306,7 +1306,17 @@ class FakeTeksherProductService:
         if not isinstance(draft_fields, dict):
             return rows
         for row in rows:
-            for key in ("tnved", "country", "product_type", "vendor_article", "color", "composition", "target_gender", "trademark"):
+            for key in (
+                "full_name",
+                "tnved",
+                "country",
+                "product_type",
+                "vendor_article",
+                "color",
+                "composition",
+                "target_gender",
+                "trademark",
+            ):
                 if draft_fields.get(key):
                     row[key] = draft_fields[key]
         return rows

@@ -42,6 +42,7 @@ def test_save_version_and_apply_latest_mapping() -> None:
                     "wb_barcode": "2049271462689",
                     "wb_size": "38",
                     "wb_ru_size": "134",
+                    "full_name": "Костюм спортивный",
                     "teksher_size": "38 МЕЖДУНАРОДНЫЙ",
                     "product_type": "КОСТЮМ СПОРТИВНЫЙ",
                     "gtin": "04709055620626",
@@ -58,8 +59,11 @@ def test_save_version_and_apply_latest_mapping() -> None:
     assert created == 1
 
     with Session(engine) as session:
+        saved_version, saved_rows = service.latest_payload(session, "user-1", "847012873")
         mapped_card = service.apply_latest(session, "user-1", _product_card())
 
+    assert saved_version == 1
+    assert saved_rows[0]["full_name"] == "Костюм спортивный"
     assert mapped_card.has_teksher_mapping is True
     assert mapped_card.mapping_version == 1
     assert mapped_card.rows[0].gtin == "04709055620626"
@@ -143,6 +147,7 @@ def test_save_version_fills_missing_values_from_wb() -> None:
                     "wb_barcode": "2049271462689",
                     "wb_size": "38",
                     "wb_ru_size": "134",
+                    "full_name": "Костюм спортивный",
                     "teksher_size": "38 МЕЖДУНАРОДНЫЙ",
                     "product_type": "КОСТЮМ СПОРТИВНЫЙ",
                     "gtin": "04709055620626",
@@ -181,6 +186,7 @@ def test_partial_update_preserves_previous_size_rows() -> None:
                     "wb_barcode": "2049271462689",
                     "wb_size": "38",
                     "wb_ru_size": "134",
+                    "full_name": "Костюм спортивный",
                     "teksher_size": "38 МЕЖДУНАРОДНЫЙ",
                     "product_type": "КОСТЮМ СПОРТИВНЫЙ",
                     "gtin": "GTIN-38-OLD",
@@ -233,8 +239,12 @@ def test_partial_update_preserves_previous_size_rows() -> None:
     assert created == 2
 
     with Session(engine) as session:
+        saved_version, saved_rows = service.latest_payload(session, "user-1", "847012873")
         mapped_card = service.apply_latest(session, "user-1", _product_card_with_sizes(["38", "40"]))
 
+    rows_payload = {row["wb_size"]: row for row in saved_rows}
+    assert saved_version == 2
+    assert rows_payload["38"]["full_name"] == "Костюм спортивный"
     rows = {row.wb_size: row for row in mapped_card.rows}
     assert mapped_card.mapping_version == 2
     assert rows["38"].gtin == "GTIN-38-OLD"

@@ -63,6 +63,8 @@ def create_all() -> None:
 
 
 def _run_runtime_migrations(engine, schema: str) -> None:
+    from wb_marks_app import server_models
+
     inspector = inspect(engine)
     app_settings_columns = {
         column["name"] for column in inspector.get_columns("app_settings", schema=schema or None)
@@ -70,8 +72,13 @@ def _run_runtime_migrations(engine, schema: str) -> None:
     workflow_run_columns = {
         column["name"] for column in inspector.get_columns("workflow_runs", schema=schema or None)
     }
+    mapping_schema = server_models.TEKSHER_SCHEMA or None
+    mapping_columns = {
+        column["name"] for column in inspector.get_columns("mapping", schema=mapping_schema)
+    }
     table_name_settings = _qualified_table_name("app_settings", schema)
     table_name_runs = _qualified_table_name("workflow_runs", schema)
+    table_name_mapping = _qualified_table_name("mapping", mapping_schema or "")
     with engine.begin() as conn:
         if "user_id" not in app_settings_columns:
             conn.execute(text(f'ALTER TABLE {table_name_settings} ADD COLUMN user_id VARCHAR(36)'))
@@ -81,6 +88,8 @@ def _run_runtime_migrations(engine, schema: str) -> None:
             conn.execute(text(f'ALTER TABLE {table_name_settings} ADD COLUMN production_address TEXT DEFAULT \'\''))
         if "user_id" not in workflow_run_columns:
             conn.execute(text(f'ALTER TABLE {table_name_runs} ADD COLUMN user_id VARCHAR(36)'))
+        if "full_name" not in mapping_columns:
+            conn.execute(text(f'ALTER TABLE {table_name_mapping} ADD COLUMN full_name TEXT DEFAULT \'\''))
 
 
 def _qualified_table_name(name: str, schema: str) -> str:
