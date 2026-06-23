@@ -77,7 +77,7 @@
   .wb-summary-table { min-width: 1380px; }
   .wb-teksher-table { min-width: 1660px; }
   .print-table { min-width: 680px; width: 680px; }
-  .order-table { min-width: 460px; width: 460px; }
+  .order-table { min-width: 560px; width: 560px; }
   .print-table th,
   .print-table td,
   .order-table th,
@@ -95,6 +95,13 @@
     padding: 2px 8px;
     text-align: right;
     width: 100%;
+  }
+  .transgran-cell { text-align: center; }
+  .transgran-checkbox {
+    height: 16px;
+    margin: 0;
+    vertical-align: middle;
+    width: 16px;
   }
   .section-title { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; }
   .section-title h2 { margin: 0; }
@@ -388,12 +395,14 @@
           <colgroup>
             <col style="width: 90px;" />
             <col style="width: 190px;" />
+            <col style="width: 120px;" />
             <col style="width: 140px;" />
           </colgroup>
           <thead>
             <tr>
               <th class="template-head">Размер</th>
               <th class="template-head">GTIN</th>
+              <th class="template-head">Трансгран</th>
               <th class="template-head">Заказать</th>
             </tr>
           </thead>
@@ -402,6 +411,14 @@
             <tr data-order-row-size="{{ row.wb_size }}">
               <td class="template-cell">{{ row.wb_size }}</td>
               <td class="template-cell" data-order-gtin title="{{ row.gtin }}">{{ row.gtin }}</td>
+              <td class="template-cell transgran-cell">
+                <input
+                  class="transgran-checkbox"
+                  type="checkbox"
+                  checked
+                  aria-label="Трансгран размер {{ row.wb_size }}"
+                />
+              </td>
               <td class="template-cell number">
                 <input
                   class="order-count-input"
