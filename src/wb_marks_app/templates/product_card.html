@@ -403,15 +403,16 @@
           <col style="width: 4%;" />
           <col style="width: 5%;" />
           <col style="width: 5%;" />
-          <col style="width: 13%;" />
-          <col style="width: 9%;" />
+          <col style="width: 10%;" />
+          <col style="width: 10%;" />
+          <col style="width: 8%;" />
+          <col style="width: 7%;" />
           <col style="width: 7%;" />
           <col style="width: 8%;" />
-          <col style="width: 9%;" />
           <col style="width: 6%;" />
-          <col style="width: 9%;" />
-          <col style="width: 13%;" />
-          <col style="width: 4%;" />
+          <col style="width: 8%;" />
+          <col style="width: 11%;" />
+          <col style="width: 3%;" />
         </colgroup>
         <thead>
           <tr>
@@ -420,6 +421,7 @@
             <th class="api-head">Рос. размер</th>
             <th class="teksher-head">Размер</th>
             <th class="teksher-head">Вид товара</th>
+            <th class="teksher-head">Полное наименование</th>
             <th class="teksher-head">GTIN</th>
             <th class="teksher-head">ТНВЭД</th>
             <th class="teksher-head">Страна</th>
@@ -438,6 +440,7 @@
             <td class="api-cell" title="{{ row.ru_size }}">{{ row.ru_size }}</td>
             <td class="teksher-cell" data-gtin-field="teksher_size" title="{{ row.teksher_size }}">{{ row.teksher_size }}</td>
             <td class="teksher-cell" data-gtin-field="product_type" title="{{ row.product_type }}">{{ row.product_type }}</td>
+            <td class="teksher-cell" data-gtin-field="full_name" title="{{ row.full_name }}">{{ row.full_name }}</td>
             <td class="teksher-cell" data-gtin-field="gtin" title="{{ row.gtin }}">{{ row.gtin }}</td>
             <td class="teksher-cell" data-gtin-field="tnved" title="{{ row.tnved }}">{{ row.tnved }}</td>
             <td class="teksher-cell" data-gtin-field="country" title="{{ row.country }}">{{ row.country }}</td>
@@ -1365,6 +1368,7 @@
       country: 'country',
       trademark: 'trademark',
       product_type: 'product_type',
+      full_name: 'full_name',
       vendor_article: 'vendor_article',
       composition: 'composition',
       color: 'color',
@@ -1406,6 +1410,7 @@
       tr.dataset.fullName = productFullNameFrom(row.functional_name);
       setLoadedCell(tr, 'teksher_size', row.size ? `${row.size} МЕЖДУНАРОДНЫЙ` : '');
       setLoadedCell(tr, 'product_type', productType, row.functional_name || '', wbCompare.product_type);
+      setLoadedCell(tr, 'full_name', tr.dataset.fullName, row.functional_name || '', wbCompare.product_type);
       setLoadedCell(tr, 'gtin', row.gtin || '');
       setLoadedCell(tr, 'tnved', wbDefaults.tnved);
       setLoadedCell(tr, 'country', wbDefaults.country);

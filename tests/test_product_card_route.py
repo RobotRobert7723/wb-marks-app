@@ -110,10 +110,10 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertNotIn("hydrateInitialMarkOrderState", page.text)
             self.assertIn('data-gtin-field="gtin"', page.text)
             self.assertIn('data-gtin-field="product_type"', page.text)
+            self.assertIn('data-gtin-field="full_name"', page.text)
             self.assertIn('data-full-name=', page.text)
-            self.assertNotIn('data-gtin-field="full_name"', page.text)
             self.assertIn('<th class="teksher-head">Вид товара</th>', page.text)
-            self.assertNotIn('<th class="teksher-head">Полное наименование</th>', page.text)
+            self.assertIn('<th class="teksher-head">Полное наименование</th>', page.text)
             self.assertIn('data-gtin-field="tnved"', page.text)
             self.assertIn('data-gtin-field="target_gender"', page.text)
             self.assertIn('data-wb-product-type="Костюмы спортивные"', page.text)
@@ -1085,7 +1085,7 @@ class ProductCardRouteTests(unittest.TestCase):
                     tnved="6112120000",
                     country="KG",
                     vendor_article="cv_nk_blue_smr",
-                    color="BLUE",
+                    color="ГОЛУБОЙ",
                     composition="polyester 100%",
                     target_gender="",
                     trademark="ErLine",
@@ -1153,7 +1153,7 @@ class ProductCardRouteTests(unittest.TestCase):
                     self.assertEqual("SRad", result["history"][0]["template"])
                     self.assertEqual(1, len(captured_labels))
                     self.assertEqual("Sport suits", captured_labels[0].item_name)
-                    self.assertEqual("BLUE", captured_labels[0].color)
+                    self.assertEqual("голубой", captured_labels[0].color)
                     self.assertEqual('ОсОО "ЭмирЛайн"', captured_labels[0].supplier_name)
                     self.assertEqual(date.today().strftime("%d.%m.%Y"), captured_labels[0].production_date)
                     self.assertEqual("КР, г. Бишкек, ул. Тестовая, 1", captured_labels[0].supplier_address)

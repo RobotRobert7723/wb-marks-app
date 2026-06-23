@@ -1183,7 +1183,7 @@ def _create_product_card_label_pdf(
                     item_name=_product_card_label_item_name(product_card, row),
                     vendor_code=item.vendor_code or row.vendor_article or product_card.wb_summary.seller_article,
                     size=item.size or row.wb_size,
-                    color=_uppercase_text(row.color or product_card.wb_summary.color),
+                    color=_lowercase_text(row.color or product_card.wb_summary.color),
                     composition=row.composition or product_card.wb_summary.composition,
                     wb_barcode=item.barcode or row.barcode,
                     mark_code=code,
@@ -1273,6 +1273,10 @@ def _capitalize_text(value: str) -> str:
 
 def _uppercase_text(value: str) -> str:
     return str(value or "").strip().upper()
+
+
+def _lowercase_text(value: str) -> str:
+    return str(value or "").strip().lower()
 
 
 def _product_card_label_print_sources(session: Session, user_id: str, product_card) -> list[dict]:
