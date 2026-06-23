@@ -459,7 +459,7 @@
                   type="number"
                   min="0"
                   step="1"
-                  value="{{ row.order_count }}"
+                  value="0"
                   aria-label="Заказать размер {{ row.wb_size }}"
                 />
               </td>
@@ -527,14 +527,13 @@
         <colgroup>
           <col style="width: 10%;" />
           <col style="width: 5%;" />
-          <col style="width: 11%;" />
+          <col style="width: 12%;" />
           <col style="width: 5%;" />
-          <col style="width: 11%;" />
-          <col style="width: 16%;" />
           <col style="width: 13%;" />
-          <col style="width: 13%;" />
+          <col style="width: 15%;" />
+          <col style="width: 15%;" />
+          <col style="width: 15%;" />
           <col style="width: 10%;" />
-          <col style="width: 6%;" />
         </colgroup>
         <thead>
           <tr>
@@ -543,7 +542,6 @@
             <th class="template-head">GTIN</th>
             <th class="template-head">Кол-во</th>
             <th class="template-head">Статус</th>
-            <th class="template-head">Документ</th>
             <th class="template-head">Эмиссия</th>
             <th class="template-head">Нанесение</th>
             <th class="template-head">Трансгран</th>
@@ -640,6 +638,7 @@
   if (orderHistoryButton) {
     orderHistoryButton.addEventListener('click', () => toggleOrderHistory());
   }
+  resetMarkOrderInputs();
 
   input.addEventListener('change', async () => {
     const file = input.files && input.files[0];
@@ -724,7 +723,6 @@
       appendTextCell(tr, item.gtin || '');
       appendTextCell(tr, item.quantity || '');
       appendTextCell(tr, item.status_text || item.status || '', item.status === 'failed' ? 'error' : '');
-      appendTextCell(tr, item.document_number || '');
       appendOperationCell(tr, item, 'order');
       appendOperationCell(tr, item, 'marking');
       appendOperationCell(tr, item, 'transgran');
@@ -862,6 +860,12 @@
       });
     });
     return { rows, hasMissingGtin };
+  }
+
+  function resetMarkOrderInputs() {
+    document.querySelectorAll('.order-count-input').forEach((inputElement) => {
+      inputElement.value = '0';
+    });
   }
 
   function scheduleMarkOrderPolling() {

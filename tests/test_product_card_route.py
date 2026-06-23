@@ -64,7 +64,7 @@ class ProductCardRouteTests(unittest.TestCase):
                         trademark="ErLine",
                         ready_to_mark=0,
                         print_count=0,
-                        order_count=0,
+                        order_count=7,
                     )
                 ],
             )
@@ -83,6 +83,8 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn("Заказ ЧЗ в Текшер", page.text)
             self.assertIn('data-order-gtin', page.text)
             self.assertIn('class="order-count-input"', page.text)
+            self.assertIn('value="0"', page.text)
+            self.assertNotIn('value="7"', page.text)
             self.assertIn("Трансгран", page.text)
             self.assertIn('class="transgran-checkbox"', page.text)
             self.assertIn("checked", page.text)
@@ -92,6 +94,7 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn("mark-orders", page.text)
             self.assertIn('id="order-history-button"', page.text)
             self.assertIn('id="order-history-panel" class="card order-history-panel"', page.text)
+            self.assertNotIn("<th class=\"template-head\">Документ</th>", page.text)
             self.assertNotIn("Последние операции сверху", page.text)
             self.assertNotIn("mark-order-initial-state", page.text)
             self.assertNotIn("hydrateInitialMarkOrderState", page.text)
