@@ -1,7 +1,7 @@
 import json
 import unittest
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from base64 import b64encode
 from io import BytesIO
 from tempfile import TemporaryDirectory
@@ -1044,7 +1044,7 @@ class ProductCardRouteTests(unittest.TestCase):
         from sqlalchemy import create_engine
         from sqlalchemy.orm import Session
         from wb_marks_app.db import Base
-        from wb_marks_app.server_models import LabelPrintJobModel, MarkCodeModel, TeksherOperationModel, WorkflowRunItemModel, WorkflowRunModel
+        from wb_marks_app.server_models import AppSettingsModel, LabelPrintJobModel, MarkCodeModel, TeksherOperationModel, WorkflowRunItemModel, WorkflowRunModel
         from wb_marks_app.services.labels import GS
         from wb_marks_app.services.product_cards import ProductCardTemplate, ProductCardMappingRow, WbProductSummary
 
@@ -1095,10 +1095,21 @@ class ProductCardRouteTests(unittest.TestCase):
         engine = create_engine("sqlite:///:memory:", future=True)
         Base.metadata.create_all(engine)
         with TemporaryDirectory() as tmp:
-            webapp.render_labels_pdf = lambda labels, template: b"%PDF\n/Type /Page\n/Type /Pages\n"
+            captured_labels = []
+
+            def fake_render_labels_pdf(labels, template):
+                captured_labels.extend(labels)
+                return b"%PDF\n/Type /Page\n/Type /Pages\n"
+
+            webapp.render_labels_pdf = fake_render_labels_pdf
             webapp._label_pdf_file_path = lambda _user_id, file_id: Path(tmp) / f"{file_id}.pdf"
             try:
                 with Session(engine) as session:
+                    settings = AppSettingsModel(
+                        user_id="user-1",
+                        supplier_name='ОсОО "ЭмирЛайн"',
+                        production_address="КР, г. Бишкек, ул. Тестовая, 1",
+                    )
                     run = WorkflowRunModel(
                         user_id="user-1",
                         draft_id="run-1",
@@ -1119,7 +1130,7 @@ class ProductCardRouteTests(unittest.TestCase):
                     )
                     operation = TeksherOperationModel(run_item=item, operation_kind="marking", status="ACCEPTED")
                     mark_code = MarkCodeModel(run_item=item, position=1, mark_code=valid_mark_code)
-                    session.add_all([operation, mark_code])
+                    session.add_all([settings, operation, mark_code])
                     session.commit()
 
                     result = webapp._create_product_card_label_pdf(FakeRequest(), session, "user-1", product_card, "srad")
@@ -1135,6 +1146,12 @@ class ProductCardRouteTests(unittest.TestCase):
                     self.assertEqual(1, jobs[0].quantity)
                     self.assertEqual("srad", jobs[0].template)
                     self.assertEqual("SRad", result["history"][0]["template"])
+                    self.assertEqual(1, len(captured_labels))
+                    self.assertEqual("Sport suits", captured_labels[0].item_name)
+                    self.assertEqual("BLUE", captured_labels[0].color)
+                    self.assertEqual('ОсОО "ЭмирЛайн"', captured_labels[0].supplier_name)
+                    self.assertEqual(date.today().strftime("%d.%m.%Y"), captured_labels[0].production_date)
+                    self.assertEqual("КР, г. Бишкек, ул. Тестовая, 1", captured_labels[0].supplier_address)
             finally:
                 webapp.render_labels_pdf = old_render_labels_pdf
                 webapp._label_pdf_file_path = old_label_pdf_file_path

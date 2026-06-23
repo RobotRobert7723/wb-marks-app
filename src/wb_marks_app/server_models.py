@@ -36,6 +36,8 @@ class AppSettingsModel(Base):
     teksher_transgran_recipient_name: Mapped[str] = mapped_column(String(255), default="")
     teksher_transgran_recipient_inn: Mapped[str] = mapped_column(String(32), default="")
     teksher_transgran_recipient_kpp: Mapped[str] = mapped_column(String(32), default="")
+    supplier_name: Mapped[str] = mapped_column(String(255), default="")
+    production_address: Mapped[str] = mapped_column(Text, default="")
     mapping_mode: Mapped[str] = mapped_column(String(32), default="size")
     mapping_payload: Mapped[str] = mapped_column(Text, default="{}")
     artifact_storage_dir: Mapped[str] = mapped_column(Text, default="")

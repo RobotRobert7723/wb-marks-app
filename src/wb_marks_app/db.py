@@ -75,6 +75,10 @@ def _run_runtime_migrations(engine, schema: str) -> None:
     with engine.begin() as conn:
         if "user_id" not in app_settings_columns:
             conn.execute(text(f'ALTER TABLE {table_name_settings} ADD COLUMN user_id VARCHAR(36)'))
+        if "supplier_name" not in app_settings_columns:
+            conn.execute(text(f'ALTER TABLE {table_name_settings} ADD COLUMN supplier_name VARCHAR(255) DEFAULT \'\''))
+        if "production_address" not in app_settings_columns:
+            conn.execute(text(f'ALTER TABLE {table_name_settings} ADD COLUMN production_address TEXT DEFAULT \'\''))
         if "user_id" not in workflow_run_columns:
             conn.execute(text(f'ALTER TABLE {table_name_runs} ADD COLUMN user_id VARCHAR(36)'))
 

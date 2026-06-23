@@ -4,6 +4,7 @@ import json
 import re
 import uuid
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -282,6 +283,8 @@ def create_app() -> FastAPI:
         teksher_transgran_recipient_name: str = Form(""),
         teksher_transgran_recipient_inn: str = Form(""),
         teksher_transgran_recipient_kpp: str = Form(""),
+        supplier_name: str = Form(""),
+        production_address: str = Form(""),
         mapping_mode: str = Form("size"),
         mapping_payload: str = Form("{}"),
         artifact_storage_dir: str = Form(""),
@@ -299,6 +302,8 @@ def create_app() -> FastAPI:
             "teksher_transgran_recipient_name": teksher_transgran_recipient_name.strip(),
             "teksher_transgran_recipient_inn": teksher_transgran_recipient_inn.strip(),
             "teksher_transgran_recipient_kpp": teksher_transgran_recipient_kpp.strip(),
+            "supplier_name": supplier_name.strip(),
+            "production_address": production_address.strip(),
             "mapping_mode": mapping_mode.strip() or "size",
             "mapping_payload": mapping_payload.strip() or "{}",
             "artifact_storage_dir": artifact_storage_dir.strip(),
@@ -1166,6 +1171,7 @@ def _create_product_card_label_pdf(
         raise ValueError("Нет готовых к печати этикеток для этой карточки.")
 
     total = sum(len(source["mark_codes"]) for source in sources)
+    label_settings = _product_card_label_settings(session, user_id)
     labels = []
     for source in sources:
         item = source["item"]
@@ -1174,18 +1180,21 @@ def _create_product_card_label_pdf(
             labels.append(
                 make_label_record(
                     template=template,
-                    item_name=item.wb_item_name or product_card.wb_summary.name,
+                    item_name=_product_card_label_item_name(product_card, row),
                     vendor_code=item.vendor_code or row.vendor_article or product_card.wb_summary.seller_article,
                     size=item.size or row.wb_size,
-                    color=row.color or product_card.wb_summary.color,
+                    color=_uppercase_text(row.color or product_card.wb_summary.color),
                     composition=row.composition or product_card.wb_summary.composition,
                     wb_barcode=item.barcode or row.barcode,
                     mark_code=code,
                     unit_count="1",
                     index=len(labels) + 1,
                     total=total,
+                    supplier_name=label_settings["supplier_name"],
+                    production_date=label_settings["production_date"],
                     country_of_origin=row.country or product_card.wb_summary.country,
                     brand=row.trademark or product_card.wb_summary.brand,
+                    supplier_address=label_settings["production_address"],
                 )
             )
 
@@ -1227,6 +1236,43 @@ def _create_product_card_label_pdf(
         "pages_count": _pdf_page_count(pdf),
         "history": _product_card_label_print_history(request, session, user_id, product_card.wb_article),
     }
+
+
+def _product_card_label_settings(session: Session, user_id: str) -> dict[str, str]:
+    result = {
+        "supplier_name": "",
+        "production_address": "",
+        "production_date": date.today().strftime("%d.%m.%Y"),
+    }
+    if not hasattr(session, "query"):
+        return result
+    try:
+        settings = get_or_create_settings(session, user_id)
+    except Exception:
+        return result
+    result["supplier_name"] = str(settings.supplier_name or "").strip()
+    result["production_address"] = str(settings.production_address or "").strip()
+    return result
+
+
+def _product_card_label_item_name(product_card, row) -> str:
+    return _capitalize_text(
+        getattr(row, "product_type", "")
+        or product_card.wb_summary.seller_category
+        or product_card.wb_summary.name
+    )
+
+
+def _capitalize_text(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    return lowered[:1].upper() + lowered[1:]
+
+
+def _uppercase_text(value: str) -> str:
+    return str(value or "").strip().upper()
 
 
 def _product_card_label_print_sources(session: Session, user_id: str, product_card) -> list[dict]:

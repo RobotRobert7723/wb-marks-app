@@ -66,6 +66,8 @@ def _config_from_env() -> AppConfig:
         teksher_transgran_recipient_name=os.getenv("TEKSHER_TRANSGRAN_RECIPIENT_NAME", "").strip(),
         teksher_transgran_recipient_inn=os.getenv("TEKSHER_TRANSGRAN_RECIPIENT_INN", "").strip(),
         teksher_transgran_recipient_kpp=os.getenv("TEKSHER_TRANSGRAN_RECIPIENT_KPP", "").strip(),
+        supplier_name=os.getenv("SUPPLIER_NAME", "").strip(),
+        production_address=os.getenv("PRODUCTION_ADDRESS", "").strip(),
         transgran_document_number_prefix=os.getenv("TRANSGRAN_DOCUMENT_NUMBER_PREFIX", "WB").strip() or "WB",
         smtp_host=os.getenv("SMTP_HOST", "").strip(),
         smtp_port=int(os.getenv("SMTP_PORT", "587")),

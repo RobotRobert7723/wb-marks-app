@@ -39,6 +39,8 @@ class AppConfig:
     teksher_transgran_recipient_name: str = ""
     teksher_transgran_recipient_inn: str = ""
     teksher_transgran_recipient_kpp: str = ""
+    supplier_name: str = ""
+    production_address: str = ""
     transgran_document_number_prefix: str = "WB"
     smtp_host: str = ""
     smtp_port: int = 587

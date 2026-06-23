@@ -711,20 +711,22 @@ class TeksherService:
             "manufacturer_inn": manufacturer["manufacturerInn"],
             "manufacturer_full_name": manufacturer["manufacturerFullName"],
             "trademark": self._text(row.get("trademark")) or self._text(product_card.wb_summary.brand),
-            "product_type": self._text(row.get("product_type")) or self._text(product_card.wb_summary.seller_category).upper(),
+            "product_type": self._product_type(product_card, row),
             "vendor_article": self._text(row.get("vendor_article")) or self._text(product_card.wb_summary.seller_article),
             "regulation": self._text(row.get("regulation")) or TEKSHER_CLOTHING_REGULATION,
             "size_unit": self._text(row.get("size_unit")) or size_unit or TEKSHER_SIZE_UNIT_INTERNATIONAL,
             "composition": self._text(row.get("composition")) or self._text(product_card.wb_summary.composition),
-            "color": self._text(row.get("color")) or self._text(product_card.wb_summary.color).upper(),
+            "color": self._uppercase_text(self._text(row.get("color")) or self._text(product_card.wb_summary.color)),
             "target_gender": self._text(row.get("target_gender")) or self._target_gender_for_create(product_card.wb_summary.gender),
         }
 
     def _product_full_name(self, product_card, row: dict) -> str:
-        full_name = (
-            self._text(row.get("full_name"))
-            or self._text(row.get("functional_name"))
-            or self._text(row.get("product_type"))
+        full_name = self._text(row.get("full_name"))
+        if full_name:
+            return full_name
+        full_name = self._capitalize_text(
+            self._text(row.get("functional_name"))
+            or self._product_type(product_card, row)
             or self._text(product_card.wb_summary.name)
         )
         if full_name:
@@ -733,11 +735,11 @@ class TeksherService:
 
     def _product_draft_attributes(self, product_card, row: dict) -> list[dict]:
         attributes: list[dict] = []
-        product_type = self._text(row.get("product_type")) or self._text(product_card.wb_summary.seller_category).upper()
+        product_type = self._product_type(product_card, row)
         size_value, size_unit = self._teksher_size_parts(
             self._text(row.get("teksher_size")) or self._text(row.get("wb_size"))
         )
-        color = self._text(row.get("color")) or self._text(product_card.wb_summary.color).upper()
+        color = self._uppercase_text(self._text(row.get("color")) or self._text(product_card.wb_summary.color))
         composition = self._text(row.get("composition")) or self._text(product_card.wb_summary.composition)
         target_gender = self._text(row.get("target_gender")) or self._target_gender_for_create(product_card.wb_summary.gender)
         vendor_article = self._text(row.get("vendor_article")) or self._text(product_card.wb_summary.seller_article)
@@ -751,6 +753,19 @@ class TeksherService:
         self._append_product_attribute(attributes, "13914", vendor_article, TEKSHER_VENDOR_ARTICLE_UNIT)
         self._append_product_attribute(attributes, "13836", regulation)
         return attributes
+
+    def _product_type(self, product_card, row: dict) -> str:
+        return self._uppercase_text(self._text(row.get("product_type")) or self._text(product_card.wb_summary.seller_category))
+
+    def _uppercase_text(self, value: str) -> str:
+        return self._text(value).upper()
+
+    def _capitalize_text(self, value: str) -> str:
+        text = self._text(value)
+        if not text:
+            return ""
+        lowered = text.lower()
+        return lowered[:1].upper() + lowered[1:]
 
     def _append_product_attribute(
         self,

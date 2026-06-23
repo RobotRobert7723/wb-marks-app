@@ -648,6 +648,7 @@ class TeksherServiceTests(unittest.TestCase):
         self.assertEqual(["04709055620664"], preview["existing_gtins"])
         self.assertEqual(["04709055620671"], preview["create_gtins"])
         self.assertEqual("КЫРГЫЗСТАН", preview["draft_fields"]["country"])
+        self.assertEqual("Костюм спортивный", preview["draft_fields"]["full_name"])
         self.assertEqual("ОсОО ЭрЛайн", preview["draft_fields"]["manufacturer_full_name"])
         self.assertEqual("12345678901234", preview["draft_fields"]["manufacturer_inn"])
         self.assertIn({"value": "КОСТЮМ СПОРТИВНЫЙ", "label": ""}, preview["dictionaries"]["product_type"])
@@ -668,7 +669,7 @@ class TeksherServiceTests(unittest.TestCase):
                     "gtin": "4709055620626",
                     "tnved": "6112120000",
                     "country": "Кыргызстан",
-                    "color": "БЕЛЫЙ",
+                    "color": "белый",
                     "composition": "полиэстер 100%",
                     "trademark": "ErLine",
                 }
@@ -680,6 +681,7 @@ class TeksherServiceTests(unittest.TestCase):
         self.assertEqual(1, len(session.created_payloads))
         payload = session.created_payloads[0]
         self.assertEqual("04709055620626", payload["gtin"])
+        self.assertEqual("Костюм спортивный", payload["fullName"])
         self.assertEqual("ОсОО ЭрЛайн", payload["manufacturerFullName"])
         self.assertEqual("12345678901234", payload["manufacturerInn"])
         self.assertEqual("470905562", payload["gcp"])

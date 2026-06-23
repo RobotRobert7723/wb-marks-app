@@ -36,6 +36,8 @@ class AuthRouteTests(unittest.TestCase):
                     "teksher_transgran_recipient_name": "Recipient One",
                     "teksher_transgran_recipient_inn": "111",
                     "teksher_transgran_recipient_kpp": "222",
+                    "supplier_name": "Supplier One",
+                    "production_address": "Address One",
                     "mapping_mode": "size",
                     "mapping_payload": "{\"size_to_gtin\":{\"S\":\"GTIN-1\"}}",
                     "artifact_storage_dir": "/tmp/a1",
@@ -45,6 +47,7 @@ class AuthRouteTests(unittest.TestCase):
             )
             self.assertEqual(200, save1.status_code)
             self.assertIn("Recipient One", client.get("/settings").text)
+            self.assertIn("Supplier One", client.get("/settings").text)
 
             logout1 = client.post("/logout", follow_redirects=False)
             self.assertEqual(303, logout1.status_code)
@@ -62,6 +65,7 @@ class AuthRouteTests(unittest.TestCase):
             settings2 = client.get("/settings")
             self.assertEqual(200, settings2.status_code)
             self.assertNotIn("Recipient One", settings2.text)
+            self.assertNotIn("Supplier One", settings2.text)
 
             save2 = client.post(
                 "/settings",
@@ -73,6 +77,8 @@ class AuthRouteTests(unittest.TestCase):
                     "teksher_transgran_recipient_name": "Recipient Two",
                     "teksher_transgran_recipient_inn": "333",
                     "teksher_transgran_recipient_kpp": "444",
+                    "supplier_name": "Supplier Two",
+                    "production_address": "Address Two",
                     "mapping_mode": "size",
                     "mapping_payload": "{\"size_to_gtin\":{\"M\":\"GTIN-2\"}}",
                     "artifact_storage_dir": "/tmp/a2",
@@ -82,12 +88,15 @@ class AuthRouteTests(unittest.TestCase):
             )
             self.assertEqual(200, save2.status_code)
             self.assertIn("Recipient Two", client.get("/settings").text)
+            self.assertIn("Supplier Two", client.get("/settings").text)
 
             client.post("/logout")
             login1 = client.post("/login", data={"login": "user_one", "password": "password123"})
             self.assertEqual(200, login1.status_code)
             self.assertIn("Recipient One", client.get("/settings").text)
             self.assertNotIn("Recipient Two", client.get("/settings").text)
+            self.assertIn("Supplier One", client.get("/settings").text)
+            self.assertNotIn("Supplier Two", client.get("/settings").text)
 
     def test_password_reset_flow_changes_password(self) -> None:
         with _isolated_app() as client:
