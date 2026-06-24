@@ -8,6 +8,7 @@ import uuid
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -1051,7 +1052,7 @@ def create_app() -> FastAPI:
         file_path = _label_pdf_file_path(user_id, file_id)
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_bytes(pdf)
-        download_url = str(request.url_for("download_label_pdf_api", file_id=file_id))
+        download_url = _app_url_for(request, "download_label_pdf_api", file_id=file_id)
         return {
             "ok": True,
             "template": labels[0].template if labels else template,
@@ -1395,7 +1396,7 @@ def _create_product_card_label_pdf(
         "ok": True,
         "message": f"PDF этикеток создан: {total}.",
         "template": template,
-        "download_url": str(request.url_for("download_label_pdf_api", file_id=file_id)),
+        "download_url": _app_url_for(request, "download_label_pdf_api", file_id=file_id),
         "file_id": file_id,
         "file_name": file_name,
         "labels_count": total,
@@ -1507,7 +1508,7 @@ def _serialize_product_card_label_print(request: Request, row: LabelPrintJobMode
         "error": row.error,
         "file_id": row.file_id,
         "file_name": row.file_name or (f"labels_{row.file_id[:8]}_58x40.pdf" if row.file_id else ""),
-        "download_url": str(request.url_for("download_label_pdf_api", file_id=row.file_id)) if row.file_id else "",
+        "download_url": _app_url_for(request, "download_label_pdf_api", file_id=row.file_id) if row.file_id else "",
     }
 
 
@@ -2014,7 +2015,19 @@ def _serialize_label_api_job_row(row: LabelApiJobRowModel) -> dict:
 
 
 def _label_api_file_url(request: Request, file_id: str) -> str:
-    return str(request.url_for("download_label_api_pdf", file_id=file_id))
+    return _app_url_for(request, "download_label_api_pdf", file_id=file_id)
+
+
+def _app_url_for(request: Request, route_name: str, **params) -> str:
+    raw = str(request.url_for(route_name, **params))
+    base_url = load_config().app_base_url.strip().rstrip("/")
+    if not base_url:
+        return raw
+    parsed = urlsplit(raw)
+    path = parsed.path
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    return f"{base_url}{path}"
 
 
 def _label_api_sizes(value) -> list[str]:
