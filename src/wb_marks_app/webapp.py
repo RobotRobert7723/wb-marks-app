@@ -276,6 +276,7 @@ def create_app() -> FastAPI:
     @app.post("/settings", response_class=HTMLResponse)
     def save_settings_page(
         request: Request,
+        wb_store_id: str = Form(""),
         wb_api_token: str = Form(""),
         wb_api_base_url: str = Form("https://supplies-api.wildberries.ru"),
         teksher_username: str = Form(""),
@@ -295,6 +296,7 @@ def create_app() -> FastAPI:
         if not user_id:
             return RedirectResponse(url="/login", status_code=303)
         payload = {
+            "wb_store_id": wb_store_id.strip(),
             "wb_api_token": wb_api_token.strip(),
             "wb_api_base_url": wb_api_base_url.strip(),
             "teksher_username": teksher_username.strip(),

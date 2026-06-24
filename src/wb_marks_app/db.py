@@ -69,6 +69,9 @@ def _run_runtime_migrations(engine, schema: str) -> None:
     app_settings_columns = {
         column["name"] for column in inspector.get_columns("app_settings", schema=schema or None)
     }
+    user_columns = {
+        column["name"] for column in inspector.get_columns("users", schema=schema or None)
+    }
     workflow_run_columns = {
         column["name"] for column in inspector.get_columns("workflow_runs", schema=schema or None)
     }
@@ -77,11 +80,16 @@ def _run_runtime_migrations(engine, schema: str) -> None:
         column["name"] for column in inspector.get_columns("mapping", schema=mapping_schema)
     }
     table_name_settings = _qualified_table_name("app_settings", schema)
+    table_name_users = _qualified_table_name("users", schema)
     table_name_runs = _qualified_table_name("workflow_runs", schema)
     table_name_mapping = _qualified_table_name("mapping", mapping_schema or "")
     with engine.begin() as conn:
+        if "wb_store_id" not in user_columns:
+            conn.execute(text(f'ALTER TABLE {table_name_users} ADD COLUMN wb_store_id VARCHAR(64) DEFAULT \'\''))
         if "user_id" not in app_settings_columns:
             conn.execute(text(f'ALTER TABLE {table_name_settings} ADD COLUMN user_id VARCHAR(36)'))
+        if "wb_store_id" not in app_settings_columns:
+            conn.execute(text(f'ALTER TABLE {table_name_settings} ADD COLUMN wb_store_id VARCHAR(64) DEFAULT \'\''))
         if "supplier_name" not in app_settings_columns:
             conn.execute(text(f'ALTER TABLE {table_name_settings} ADD COLUMN supplier_name VARCHAR(255) DEFAULT \'\''))
         if "production_address" not in app_settings_columns:

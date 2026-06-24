@@ -79,6 +79,9 @@ The response contains a `download_url` for the generated PDF.
 Full API field mapping, examples, response schema, and validation errors are documented in
 [docs/labels_api.md](docs/labels_api.md).
 
+The planned Seller WB integration API contract is documented in
+[docs/seller_wb_labels_api.md](docs/seller_wb_labels_api.md).
+
 ## Docker
 
 ```powershell

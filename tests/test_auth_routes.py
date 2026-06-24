@@ -98,6 +98,87 @@ class AuthRouteTests(unittest.TestCase):
             self.assertIn("Supplier One", client.get("/settings").text)
             self.assertNotIn("Supplier Two", client.get("/settings").text)
 
+    def test_users_with_same_wb_store_id_share_store_settings(self) -> None:
+        with _isolated_app() as client:
+            register1 = client.post(
+                "/register",
+                data={
+                    "email": "one@example.com",
+                    "login": "store_user_one",
+                    "password": "password123",
+                    "password_confirm": "password123",
+                },
+            )
+            self.assertEqual(200, register1.status_code)
+
+            save1 = client.post(
+                "/settings",
+                data={
+                    "wb_store_id": "4006282",
+                    "wb_api_base_url": "https://supplies-api.wildberries.ru",
+                    "wb_api_token": "token-store-1",
+                    "teksher_username": "teksher-store",
+                    "teksher_password": "secret-store",
+                    "teksher_transgran_recipient_name": "Recipient Store One",
+                    "teksher_transgran_recipient_inn": "111",
+                    "teksher_transgran_recipient_kpp": "222",
+                    "supplier_name": "Supplier Store One",
+                    "production_address": "Address Store One",
+                    "mapping_mode": "size",
+                    "mapping_payload": "{\"size_to_gtin\":{\"S\":\"GTIN-1\"}}",
+                    "artifact_storage_dir": "/tmp/store",
+                    "transgran_document_number_prefix": "WB",
+                    "step_timeout_seconds": "300",
+                },
+            )
+            self.assertEqual(200, save1.status_code)
+            self.assertIn("4006282", client.get("/settings").text)
+            self.assertIn("Recipient Store One", client.get("/settings").text)
+
+            client.post("/logout")
+            register2 = client.post(
+                "/register",
+                data={
+                    "email": "two@example.com",
+                    "login": "store_user_two",
+                    "password": "password123",
+                    "password_confirm": "password123",
+                },
+            )
+            self.assertEqual(200, register2.status_code)
+            self.assertNotIn("Recipient Store One", client.get("/settings").text)
+
+            save2 = client.post(
+                "/settings",
+                data={
+                    "wb_store_id": "4006282",
+                    "wb_api_base_url": "https://supplies-api.wildberries.ru",
+                    "wb_api_token": "token-store-2",
+                    "teksher_username": "teksher-store",
+                    "teksher_password": "secret-store",
+                    "teksher_transgran_recipient_name": "Recipient Store Two",
+                    "teksher_transgran_recipient_inn": "333",
+                    "teksher_transgran_recipient_kpp": "444",
+                    "supplier_name": "Supplier Store Two",
+                    "production_address": "Address Store Two",
+                    "mapping_mode": "size",
+                    "mapping_payload": "{\"size_to_gtin\":{\"M\":\"GTIN-2\"}}",
+                    "artifact_storage_dir": "/tmp/store",
+                    "transgran_document_number_prefix": "WB",
+                    "step_timeout_seconds": "300",
+                },
+            )
+            self.assertEqual(200, save2.status_code)
+            self.assertIn("Recipient Store Two", client.get("/settings").text)
+
+            client.post("/logout")
+            login1 = client.post("/login", data={"login": "store_user_one", "password": "password123"})
+            self.assertEqual(200, login1.status_code)
+            settings1 = client.get("/settings")
+            self.assertIn("4006282", settings1.text)
+            self.assertIn("Recipient Store Two", settings1.text)
+            self.assertNotIn("Recipient Store One", settings1.text)
+
     def test_password_reset_flow_changes_password(self) -> None:
         with _isolated_app() as client:
             register = client.post(

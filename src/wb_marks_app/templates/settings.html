@@ -6,6 +6,10 @@
   <form method="post" action="/settings">
     <div class="grid">
       <div>
+        <label>WB Store ID</label>
+        <input type="text" name="wb_store_id" value="{{ settings.wb_store_id }}" />
+      </div>
+      <div>
         <label>WB API base URL</label>
         <input type="text" name="wb_api_base_url" value="{{ settings.wb_api_base_url }}" />
       </div>

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from wb_marks_app.config import load_config
 from wb_marks_app.models import AppConfig, SupplyItem
-from wb_marks_app.server_models import AppSettingsModel
+from wb_marks_app.server_models import AppSettingsModel, UserModel
 
 
 @dataclass(slots=True)
@@ -32,9 +32,54 @@ class MappingRuleSet:
         return ""
 
 
+def _normalize_store_id(value: str | None) -> str:
+    return str(value or "").strip()
+
+
+def get_settings_by_store_id(session: Session, wb_store_id: str) -> AppSettingsModel | None:
+    store_id = _normalize_store_id(wb_store_id)
+    if not store_id:
+        return None
+    return (
+        session.query(AppSettingsModel)
+        .filter(AppSettingsModel.wb_store_id == store_id)
+        .order_by(AppSettingsModel.id.asc())
+        .first()
+    )
+
+
+def _get_user(session: Session, user_id: str) -> UserModel | None:
+    return session.get(UserModel, user_id)
+
+
+def _set_user_store_id(session: Session, user_id: str, wb_store_id: str) -> None:
+    user = _get_user(session, user_id)
+    if user is None:
+        return
+    user.wb_store_id = _normalize_store_id(wb_store_id)
+    session.add(user)
+
+
 def get_or_create_settings(session: Session, user_id: str) -> AppSettingsModel:
+    user = _get_user(session, user_id)
+    user_store_id = _normalize_store_id(user.wb_store_id if user is not None else "")
+    if user_store_id:
+        settings = get_settings_by_store_id(session, user_store_id)
+        if settings is not None:
+            if not settings.user_id:
+                settings.user_id = user_id
+                session.add(settings)
+            return settings
+
     settings = session.query(AppSettingsModel).filter(AppSettingsModel.user_id == user_id).first()
     if settings is not None:
+        settings_store_id = _normalize_store_id(settings.wb_store_id)
+        if user is not None and not user_store_id and settings_store_id:
+            user.wb_store_id = settings_store_id
+            session.add(user)
+        elif user_store_id and not settings_store_id:
+            settings.wb_store_id = user_store_id
+            session.add(settings)
         return settings
 
     base = load_config()
@@ -42,6 +87,7 @@ def get_or_create_settings(session: Session, user_id: str) -> AppSettingsModel:
     settings = AppSettingsModel(
         id=int(next_id),
         user_id=user_id,
+        wb_store_id=user_store_id,
         wb_api_token=base.wb_api_token,
         wb_api_base_url=base.wb_api_base_url or "https://supplies-api.wildberries.ru",
         teksher_username=base.teksher_username,
@@ -63,7 +109,11 @@ def get_or_create_settings(session: Session, user_id: str) -> AppSettingsModel:
 
 
 def update_settings(session: Session, user_id: str, payload: dict) -> AppSettingsModel:
+    if "wb_store_id" in payload:
+        _set_user_store_id(session, user_id, payload["wb_store_id"])
     settings = get_or_create_settings(session, user_id)
+    if "wb_store_id" in payload:
+        settings.wb_store_id = _normalize_store_id(payload["wb_store_id"])
     for field in (
         "wb_api_token",
         "wb_api_base_url",
@@ -121,6 +171,7 @@ def load_mapping_rules(settings: AppSettingsModel) -> MappingRuleSet:
 
 def settings_public_dict(settings: AppSettingsModel) -> dict:
     return {
+        "wb_store_id": _normalize_store_id(settings.wb_store_id),
         "wb_api_base_url": settings.wb_api_base_url,
         "has_wb_api_token": bool(settings.wb_api_token),
         "teksher_username": settings.teksher_username,

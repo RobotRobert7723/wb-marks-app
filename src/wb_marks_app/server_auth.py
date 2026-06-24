@@ -175,6 +175,8 @@ def _claim_legacy_state(session: Session, user: UserModel) -> None:
     ).scalars().first()
     if legacy_settings is not None:
         legacy_settings.user_id = user.id
+        if legacy_settings.wb_store_id:
+            user.wb_store_id = legacy_settings.wb_store_id
 
     legacy_runs = session.execute(
         select(WorkflowRunModel).where(WorkflowRunModel.user_id.is_(None))

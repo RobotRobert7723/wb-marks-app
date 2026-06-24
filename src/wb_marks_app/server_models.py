@@ -29,6 +29,7 @@ class AppSettingsModel(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey(_fk("users.id"), ondelete="SET NULL"), unique=True, index=True, nullable=True)
+    wb_store_id: Mapped[str] = mapped_column(String(64), default="", index=True)
     wb_api_token: Mapped[str] = mapped_column(Text, default="")
     wb_api_base_url: Mapped[str] = mapped_column(String(255), default="https://supplies-api.wildberries.ru")
     teksher_username: Mapped[str] = mapped_column(String(255), default="")
@@ -60,6 +61,7 @@ class UserModel(Base):
     email: Mapped[str] = mapped_column(String(255), index=True)
     login: Mapped[str] = mapped_column(String(64), index=True)
     password_hash: Mapped[str] = mapped_column(Text)
+    wb_store_id: Mapped[str] = mapped_column(String(64), default="", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, onupdate=_utc_now)
 
