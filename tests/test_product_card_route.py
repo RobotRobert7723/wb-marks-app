@@ -1,5 +1,6 @@
 import json
 import unittest
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date, datetime, timezone
 from base64 import b64encode
@@ -123,6 +124,7 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn('data-wb-composition="полиэстер 100%"', page.text)
             self.assertIn('data-wb-brand="ErLine"', page.text)
             self.assertIn('data-has-mapping="false"', page.text)
+            self.assertIn('id="gtin-request-button"', page.text)
             self.assertIn('id="mapping-save-button" class="secondary" disabled', page.text)
             self.assertIn('id="label-template-select"', page.text)
             self.assertIn('<option value="srad" selected>SRad</option>', page.text)
@@ -136,6 +138,7 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn("gtin-loaded", page.text)
             self.assertIn("gtin-mismatch", page.text)
             self.assertIn("function setLoadedCell(", page.text)
+            self.assertIn("function requestGtinExcel(", page.text)
             self.assertIn("function clearGtinTable()", page.text)
             self.assertIn("function targetGenderFromWb(", page.text)
 
@@ -390,6 +393,147 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertFalse(payload["ok"])
             self.assertEqual("Артикул продавца в файле не найден", payload["message"])
             self.assertEqual([], payload["rows"])
+            client.close()
+        finally:
+            webapp.create_all = old_create_all
+            webapp.load_config = old_load_config
+            webapp.session_scope = old_session_scope
+            webapp.get_or_create_settings = old_get_or_create_settings
+            webapp.settings_to_app_config = old_settings_to_app_config
+            webapp.product_card_service = old_product_card_service
+
+    def test_gtin_request_prompts_for_gpc_then_returns_template_xlsx(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from openpyxl import load_workbook
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session
+        from sqlalchemy.pool import StaticPool
+        from wb_marks_app.db import Base
+        from wb_marks_app.models import AppConfig
+        from wb_marks_app.server_models import GpcCategoryMappingModel
+        from wb_marks_app.services.product_cards import ProductCardTemplate, ProductCardMappingRow, WbProductSummary
+
+        old_create_all = webapp.create_all
+        old_load_config = webapp.load_config
+        old_session_scope = webapp.session_scope
+        old_get_or_create_settings = webapp.get_or_create_settings
+        old_settings_to_app_config = webapp.settings_to_app_config
+        old_product_card_service = webapp.product_card_service
+        engine = create_engine(
+            "sqlite:///:memory:",
+            future=True,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+
+        @contextmanager
+        def test_session_scope():
+            with Session(engine) as session:
+                try:
+                    yield session
+                    session.commit()
+                except Exception:
+                    session.rollback()
+                    raise
+
+        webapp.create_all = lambda: None
+        webapp.load_config = lambda: AppConfig(secret_key="test-secret")
+        webapp.session_scope = test_session_scope
+        webapp.get_or_create_settings = lambda _session, _user_id: object()
+        webapp.settings_to_app_config = lambda _settings: AppConfig(wb_api_token="token")
+        webapp.product_card_service = FakeProductCardService(
+            ProductCardTemplate(
+                wb_article="847012874",
+                image_url="",
+                api_status="",
+                wb_summary=WbProductSummary(
+                    name="Спортивный костюм Nike",
+                    seller_category="Костюмы спортивные",
+                    wb_article="847012874",
+                    tnved="6112120000",
+                    country="Киргизия",
+                    seller_article="cv_nk_white_smr",
+                    color="белый",
+                    composition="полиэстер 100%",
+                    gender="Детский",
+                    brand="ErLine",
+                ),
+                rows=[
+                    ProductCardMappingRow(
+                        barcode="2049271462689",
+                        wb_size="38",
+                        ru_size="134",
+                        teksher_size="",
+                        product_type="",
+                        gtin="",
+                        tnved="",
+                        country="",
+                        vendor_article="",
+                        color="БЕЛЫЙ",
+                        composition="",
+                        target_gender="",
+                        trademark="",
+                        ready_to_mark=0,
+                        print_count=0,
+                        order_count=0,
+                    ),
+                    ProductCardMappingRow(
+                        barcode="2049271462672",
+                        wb_size="40",
+                        ru_size="140",
+                        teksher_size="",
+                        product_type="",
+                        gtin="",
+                        tnved="",
+                        country="",
+                        vendor_article="",
+                        color="БЕЛЫЙ",
+                        composition="",
+                        target_gender="",
+                        trademark="",
+                        ready_to_mark=0,
+                        print_count=0,
+                        order_count=0,
+                    ),
+                ],
+            )
+        )
+        try:
+            app = webapp.create_app()
+            client = TestClient(app)
+            client.cookies.set("wb_marks_session", _session_cookie({"user_id": "user-1", "login": "tester"}, "test-secret"))
+
+            missing_response = client.post("/api/product-cards/847012874/gtin-request", json={})
+
+            self.assertEqual(409, missing_response.status_code)
+            missing_payload = missing_response.json()
+            self.assertTrue(missing_payload["gpc_required"])
+            self.assertEqual("Костюмы спортивные", missing_payload["category"])
+
+            response = client.post("/api/product-cards/847012874/gtin-request", json={"gpc_code": "10001359"})
+
+            self.assertEqual(200, response.status_code)
+            self.assertIn("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", response.headers["content-type"])
+            workbook = load_workbook(BytesIO(response.content))
+            worksheet = workbook[workbook.sheetnames[0]]
+            self.assertEqual("ErLine", worksheet.cell(7, 1).value)
+            self.assertEqual("Русский", worksheet.cell(7, 3).value)
+            self.assertEqual("Костюмы спортивные", worksheet.cell(7, 4).value)
+            self.assertEqual("Арт.cv_nk_white_smr, цвет: белый, р. 38", worksheet.cell(7, 5).value)
+            self.assertEqual("Россия (Российская Федерация)", worksheet.cell(7, 15).value)
+            self.assertEqual("Кыргызстан", worksheet.cell(7, 16).value)
+            self.assertEqual("10001359", worksheet.cell(7, 18).value)
+            self.assertEqual("1", worksheet.cell(7, 19).value)
+            self.assertEqual("Штуки", worksheet.cell(7, 20).value)
+            self.assertEqual("Арт.cv_nk_white_smr, цвет: белый, р. 40", worksheet.cell(8, 5).value)
+
+            cached_response = client.post("/api/product-cards/847012874/gtin-request", json={})
+            self.assertEqual(200, cached_response.status_code)
+            with Session(engine) as session:
+                mapping = session.query(GpcCategoryMappingModel).one()
+                self.assertEqual("Костюмы спортивные", mapping.wb_category)
+                self.assertEqual("10001359", mapping.gpc_code)
             client.close()
         finally:
             webapp.create_all = old_create_all

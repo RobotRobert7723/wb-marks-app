@@ -326,6 +326,7 @@
         <div class="product-actions">
           <button type="button" id="gtin-upload-button">Загрузить GTIN</button>
           <input id="gtin-upload-input" type="file" accept=".xlsx,.xlsm" hidden />
+          <button type="button" id="gtin-request-button" class="secondary">Запрос GTIN</button>
           <button type="button" id="mapping-save-button" class="secondary" disabled>Сохранить</button>
         </div>
         <div id="gtin-update-confirm" class="upload-confirm" hidden>
@@ -656,6 +657,7 @@
 (() => {
   const page = document.querySelector('.product-page');
   const uploadButton = document.getElementById('gtin-upload-button');
+  const gtinRequestButton = document.getElementById('gtin-request-button');
   const input = document.getElementById('gtin-upload-input');
   const saveButton = document.getElementById('mapping-save-button');
   const status = document.getElementById('gtin-upload-status');
@@ -713,6 +715,9 @@
     }
     openUploadDialog();
   });
+  if (gtinRequestButton) {
+    gtinRequestButton.addEventListener('click', () => requestGtinExcel());
+  }
   if (confirmYes) {
     confirmYes.addEventListener('click', () => {
       hideUpdateConfirm();
@@ -781,6 +786,60 @@
       input.value = '';
     }
   });
+
+  async function requestGtinExcel(gpcCode = '') {
+    setStatus('Формируем заявку GTIN...', '');
+    if (gtinRequestButton) gtinRequestButton.disabled = true;
+    try {
+      const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/gtin-request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(gpcCode ? { gpc_code: gpcCode } : {}),
+      });
+      const contentType = response.headers.get('content-type') || '';
+      if (response.status === 409 || contentType.includes('application/json')) {
+        const payload = await response.json().catch(() => ({}));
+        if (response.status === 409 && payload.gpc_required) {
+          const code = window.prompt(payload.message || 'Укажите код GPC для категории WB', '');
+          if (code && code.trim()) {
+            await requestGtinExcel(code.trim());
+          } else {
+            setStatus('Запрос GTIN отменен.', '');
+          }
+          return;
+        }
+        setStatus(payload.message || payload.detail || 'Не удалось сформировать заявку GTIN.', 'error');
+        return;
+      }
+      if (!response.ok) {
+        setStatus('Не удалось сформировать заявку GTIN.', 'error');
+        return;
+      }
+      const blob = await response.blob();
+      downloadBlob(blob, fileNameFromContentDisposition(response.headers.get('content-disposition')) || 'gtin_request.xlsx');
+      setStatus('Файл заявки GTIN сформирован.', 'success');
+    } catch (error) {
+      setStatus('Не удалось сформировать заявку GTIN.', 'error');
+    } finally {
+      if (gtinRequestButton) gtinRequestButton.disabled = false;
+    }
+  }
+
+  function downloadBlob(blob, fileName) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function fileNameFromContentDisposition(header) {
+    const match = String(header || '').match(/filename="([^"]+)"/i);
+    return match ? match[1] : '';
+  }
 
   async function toggleOrderHistory() {
     if (!orderHistoryPanel) return;

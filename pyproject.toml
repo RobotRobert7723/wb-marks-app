@@ -38,4 +38,4 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-wb_marks_app = ["templates/*.html", "static/vendor/*", "static/label_assets/*"]
+wb_marks_app = ["templates/*.html", "static/vendor/*", "static/label_assets/*", "assets/*.xlsx"]

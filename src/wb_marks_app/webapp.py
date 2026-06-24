@@ -33,6 +33,7 @@ from wb_marks_app.server_auth import (
 from wb_marks_app.server_models import (
     AppSettingsModel,
     ArtifactModel,
+    GpcCategoryMappingModel,
     LabelApiJobModel,
     LabelApiJobRowModel,
     LabelPrintJobModel,
@@ -51,6 +52,7 @@ from wb_marks_app.server_settings import (
 )
 from wb_marks_app.services.browser import BrowserSessionManager
 from wb_marks_app.services.gtin_excel import GtinExcelParser
+from wb_marks_app.services.gtin_request import build_gtin_request_workbook
 from wb_marks_app.services.label_pdf import LabelPdfError, render_labels_pdf
 from wb_marks_app.services.labels import build_manual_labels, extract_gs1_mark_codes, labels_to_dicts, make_label_record
 from wb_marks_app.services.product_cards import ProductCardTemplateService
@@ -658,6 +660,56 @@ def create_app() -> FastAPI:
             "seller_article": seller_article,
             "rows": [_serialize_gtin_row(row) for row in matched_rows],
         }
+
+    @app.post("/api/product-cards/{wb_article}/gtin-request")
+    async def create_product_card_gtin_request(request: Request, wb_article: str):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        with session_scope() as session:
+            settings = get_or_create_settings(session, user_id)
+            config = settings_to_app_config(settings)
+        product_card = product_card_service.build_template(wb_article, config)
+        category = product_card.wb_summary.seller_category.strip()
+        if not category:
+            return JSONResponse({"ok": False, "message": "Категория WB не загружена для этой карточки."}, status_code=400)
+        if not product_card.rows:
+            return JSONResponse({"ok": False, "message": "В карточке WB нет размеров для заявки GTIN."}, status_code=400)
+
+        requested_gpc_code = _normalize_gpc_code(payload.get("gpc_code"))
+        if payload.get("gpc_code") and not requested_gpc_code:
+            return JSONResponse({"ok": False, "message": "Код GPC должен состоять из 8 цифр."}, status_code=400)
+
+        with session_scope() as session:
+            gpc_code = _product_card_gpc_code(session, category)
+            if not gpc_code:
+                if not requested_gpc_code:
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "gpc_required": True,
+                            "category": category,
+                            "message": f"Укажите код GPC для категории WB: {category}",
+                        },
+                        status_code=409,
+                    )
+                _save_product_card_gpc_code(session, category, requested_gpc_code)
+                gpc_code = requested_gpc_code
+
+        content = build_gtin_request_workbook(product_card, gpc_code)
+        file_name = _gtin_request_file_name(product_card)
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
+        )
 
     @app.post("/api/product-cards/{wb_article}/mapping/preview")
     async def preview_product_card_mapping(request: Request, wb_article: str):
@@ -2376,6 +2428,50 @@ def _serialize_gtin_row(row) -> dict:
         "color": row.color,
         "size": row.size,
     }
+
+
+def _normalize_gpc_code(value) -> str:
+    code = re.sub(r"\D+", "", str(value or ""))
+    return code if len(code) == 8 else ""
+
+
+def _product_card_gpc_code(session: Session, wb_category: str) -> str:
+    category_key = _gpc_category_key(wb_category)
+    if not category_key:
+        return ""
+    row = session.execute(
+        select(GpcCategoryMappingModel).where(GpcCategoryMappingModel.wb_category_key == category_key)
+    ).scalars().first()
+    return row.gpc_code if row else ""
+
+
+def _save_product_card_gpc_code(session: Session, wb_category: str, gpc_code: str) -> None:
+    category_key = _gpc_category_key(wb_category)
+    if not category_key:
+        return
+    row = session.execute(
+        select(GpcCategoryMappingModel).where(GpcCategoryMappingModel.wb_category_key == category_key)
+    ).scalars().first()
+    if row is None:
+        session.add(
+            GpcCategoryMappingModel(
+                wb_category=wb_category.strip(),
+                wb_category_key=category_key,
+                gpc_code=gpc_code,
+            )
+        )
+        return
+    row.wb_category = wb_category.strip()
+    row.gpc_code = gpc_code
+
+
+def _gpc_category_key(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+
+
+def _gtin_request_file_name(product_card) -> str:
+    suffix = _safe_path_token(product_card.wb_summary.seller_article or product_card.wb_article)
+    return f"gtin_request_{_safe_path_token(product_card.wb_article)}_{suffix}.xlsx"
 
 
 def _product_mapping_save_message(version: int, rows_saved: int, created_gtins: list[str]) -> str:

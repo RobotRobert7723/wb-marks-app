@@ -191,6 +191,21 @@ class TeksherMappingModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
 
 
+class GpcCategoryMappingModel(Base):
+    __tablename__ = "gpc_category_mappings"
+    __table_args__ = (
+        UniqueConstraint("wb_category_key", name="uq_gpc_category_mapping_key"),
+        {"schema": SCHEMA} if SCHEMA else {},
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    wb_category: Mapped[str] = mapped_column(Text, default="")
+    wb_category_key: Mapped[str] = mapped_column(String(255), index=True)
+    gpc_code: Mapped[str] = mapped_column(String(8), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, onupdate=_utc_now)
+
+
 class MarkCodeModel(Base):
     __tablename__ = "mark_codes"
     __table_args__ = (
