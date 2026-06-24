@@ -1,5 +1,7 @@
 # Seller WB Labels API
 
+Production base URL: `https://marksapp.sesrv.ru/api/v1`.
+
 Спецификация API web-сервиса для печати этикеток из интерфейса `seller.wildberries.ru/new-goods/all-goods`.
 
 Расширение Chrome встраивает кнопку печати в строку товара WB, получает из страницы:

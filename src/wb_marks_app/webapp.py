@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
+import secrets
 import uuid
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -29,6 +32,8 @@ from wb_marks_app.server_auth import (
 from wb_marks_app.server_models import (
     AppSettingsModel,
     ArtifactModel,
+    LabelApiJobModel,
+    LabelApiJobRowModel,
     LabelPrintJobModel,
     MarkCodeModel,
     TeksherOperationModel,
@@ -37,6 +42,7 @@ from wb_marks_app.server_models import (
     WorkflowRunModel,
 )
 from wb_marks_app.server_settings import (
+    get_settings_by_store_id,
     get_or_create_settings,
     settings_public_dict,
     settings_to_app_config,
@@ -81,6 +87,14 @@ def create_app() -> FastAPI:
         https_only=config.app_base_url.startswith("https://"),
         max_age=60 * 60 * 24 * 30,
     )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["https://seller.wildberries.ru"],
+        allow_origin_regex=r"^chrome-extension://.+$",
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+        max_age=600,
+    )
     static_dir = Path(__file__).resolve().parent / "static"
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
@@ -95,6 +109,156 @@ def create_app() -> FastAPI:
     @app.get("/ready")
     def ready() -> dict:
         return {"status": "ready"}
+
+    @app.post("/api/v1/labels/readiness")
+    async def label_api_readiness(request: Request):
+        auth_error = _label_api_auth_error(request)
+        if auth_error is not None:
+            return auth_error
+        try:
+            payload = await _label_api_json_payload(request)
+        except ValueError as exc:
+            return _label_api_error(str(exc), 400)
+
+        wb_store_id = _label_api_text(payload.get("wbStoreId"))
+        nm_id = _label_api_text(payload.get("nmId"))
+        sizes = _label_api_sizes(payload.get("sizes"))
+        settings_url = _label_api_settings_url(nm_id, wb_store_id)
+
+        if not wb_store_id or not nm_id or not sizes:
+            return _label_api_error("wbStoreId, nmId and sizes are required.", 400, settingsUrl=settings_url)
+
+        with session_scope() as session:
+            user, settings = _label_api_store_context(session, wb_store_id)
+            if user is None or settings is None:
+                return _label_api_setup_required(nm_id, wb_store_id, "Не найден магазин WB в WB Marks App.")
+            if _label_api_settings_incomplete(settings):
+                return _label_api_setup_required(nm_id, wb_store_id, "Не заполнены настройки WB Marks App или Текшер.")
+
+            missing = _label_api_missing_mapping_sizes(session, user.id, nm_id, sizes)
+            if missing:
+                return _label_api_setup_required(
+                    nm_id,
+                    wb_store_id,
+                    f"Не найден мэппинг для размеров: {', '.join(missing)}",
+                )
+
+        return {"status": "ready", "message": "Сервис готов к печати"}
+
+    @app.post("/api/v1/labels/print-jobs")
+    async def create_label_api_print_job(request: Request):
+        auth_error = _label_api_auth_error(request)
+        if auth_error is not None:
+            return auth_error
+        try:
+            payload = await _label_api_json_payload(request)
+            normalized = _normalize_label_api_print_payload(payload)
+        except ValueError as exc:
+            return _label_api_error(str(exc), 422)
+
+        request_hash = _label_api_request_hash(normalized)
+        wb_store_id = normalized["wbStoreId"]
+        nm_id = normalized["nmId"]
+        settings_url = _label_api_settings_url(nm_id, wb_store_id)
+
+        with session_scope() as session:
+            existing = _label_api_existing_job(session, wb_store_id, normalized["requestId"])
+            if existing is not None:
+                if existing.request_hash != request_hash:
+                    return _label_api_error("requestId уже использован с другими параметрами", 409)
+                _refresh_label_api_job(request, session, existing)
+                return JSONResponse(_serialize_label_api_job(request, existing), status_code=200)
+
+            user, settings = _label_api_store_context(session, wb_store_id)
+            if user is None or settings is None:
+                return _label_api_error("Не найден магазин WB в WB Marks App.", 422, settingsUrl=settings_url)
+            if _label_api_settings_incomplete(settings):
+                return _label_api_error("Не заполнены настройки WB Marks App или Текшер.", 422, settingsUrl=settings_url)
+
+            config = settings_to_app_config(settings)
+            version, mapping_rows = teksher_mapping_service.latest_payload(session, user.id, nm_id)
+            if version == 0 or not mapping_rows:
+                return _label_api_error("Не найден мэппинг для карточки WB.", 422, settingsUrl=settings_url)
+            workflow_rows = _label_api_workflow_rows(mapping_rows, normalized["items"])
+            missing = _label_api_missing_item_sizes(workflow_rows, normalized["items"])
+            if missing:
+                return _label_api_error(
+                    f"Не найден мэппинг для размеров: {', '.join(missing)}",
+                    422,
+                    settingsUrl=settings_url,
+                )
+            user_id = user.id
+
+        try:
+            product_card = product_card_service.build_template(nm_id, config)
+            run_id = workflow_service.create_product_card_run(user_id, product_card.wb_article, product_card, workflow_rows)
+        except ValueError as exc:
+            return _label_api_error(str(exc), 422, settingsUrl=settings_url)
+        except (AppError, ManualStepRequired) as exc:
+            return _label_api_error(str(exc), 400, settingsUrl=settings_url)
+
+        with session_scope() as session:
+            job = LabelApiJobModel(
+                request_id=normalized["requestId"],
+                request_hash=request_hash,
+                wb_store_id=wb_store_id,
+                store_name=normalized["storeName"],
+                user_id=user_id,
+                nm_id=product_card.wb_article,
+                vendor_code=normalized["vendorCode"],
+                template=normalized["template"],
+                status="queued",
+                run_id=run_id,
+            )
+            session.add(job)
+            session.flush()
+            for row in workflow_rows:
+                session.add(
+                    LabelApiJobRowModel(
+                        job_id=job.id,
+                        size=row["size"],
+                        quantity=row["quantity"],
+                        gtin=row["gtin"],
+                        status="emission",
+                    )
+                )
+            session.flush()
+            response = _serialize_label_api_job(request, job)
+        return JSONResponse(response, status_code=202)
+
+    @app.get("/api/v1/labels/print-jobs/{job_id}")
+    def get_label_api_print_job(request: Request, job_id: str):
+        auth_error = _label_api_auth_error(request)
+        if auth_error is not None:
+            return auth_error
+        with session_scope() as session:
+            job = session.get(LabelApiJobModel, job_id)
+            if job is None:
+                return _label_api_error("Print job not found.", 404)
+            _refresh_label_api_job(request, session, job)
+            return _serialize_label_api_job(request, job)
+
+    @app.get("/api/v1/labels/files/{file_id}.pdf", name="download_label_api_pdf")
+    def download_label_api_pdf(request: Request, file_id: str):
+        auth_error = _label_api_auth_error(request)
+        if auth_error is not None:
+            return auth_error
+        if not _LABEL_PDF_ID_RE.fullmatch(file_id):
+            raise HTTPException(status_code=404, detail="PDF not found")
+        with session_scope() as session:
+            job = session.execute(
+                select(LabelApiJobModel).where(LabelApiJobModel.pdf_file_id == file_id)
+            ).scalars().first()
+            if job is None or not job.user_id:
+                raise HTTPException(status_code=404, detail="PDF not found")
+            file_path = _label_pdf_file_path(job.user_id, file_id)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="PDF not found")
+        return FileResponse(
+            path=file_path,
+            filename=f"labels_{file_id[:8]}_58x40.pdf",
+            media_type="application/pdf",
+        )
 
     @app.get("/", response_class=HTMLResponse)
     def root(request: Request) -> RedirectResponse:
@@ -1471,6 +1635,413 @@ def _product_card_order_status_text(item: WorkflowRunItemModel, operations_by_ki
             return "Нанесение выполнено"
         return "Трансгран создан"
     return item.status
+
+
+def _label_api_auth_error(request: Request) -> JSONResponse | None:
+    configured = load_config().label_api_token.strip()
+    if not configured:
+        return _label_api_error("Label API token is not configured.", 503)
+
+    header = request.headers.get("authorization", "")
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer" or not token or not secrets.compare_digest(token.strip(), configured):
+        return _label_api_error("Unauthorized", 401)
+    return None
+
+
+async def _label_api_json_payload(request: Request) -> dict:
+    try:
+        payload = await request.json()
+    except ValueError as exc:
+        raise ValueError("JSON body is required.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("JSON body must be an object.")
+    return payload
+
+
+def _label_api_error(message: str, status_code: int = 400, **extra) -> JSONResponse:
+    payload = {"status": "error", "message": message}
+    payload.update({key: value for key, value in extra.items() if value})
+    return JSONResponse(payload, status_code=status_code)
+
+
+def _label_api_setup_required(nm_id: str, wb_store_id: str, message: str) -> dict:
+    return {
+        "status": "setup_required",
+        "message": message or "Не найден мэппинг или Текшер недоступен. Выполните настройки",
+        "settingsUrl": _label_api_settings_url(nm_id, wb_store_id),
+    }
+
+
+def _label_api_settings_url(nm_id: str, wb_store_id: str) -> str:
+    config = load_config()
+    base_url = config.app_base_url.rstrip("/") or "http://localhost:8000"
+    path = f"/product-cards/{_label_api_text(nm_id)}" if _label_api_text(nm_id) else "/settings"
+    fragment = f"#{_label_api_text(wb_store_id)}" if _label_api_text(wb_store_id) else ""
+    return f"{base_url}{path}{fragment}"
+
+
+def _label_api_store_context(session: Session, wb_store_id: str) -> tuple[UserModel | None, AppSettingsModel | None]:
+    store_id = _label_api_text(wb_store_id)
+    if not store_id:
+        return None, None
+
+    settings = get_settings_by_store_id(session, store_id)
+    user = session.execute(
+        select(UserModel).where(UserModel.wb_store_id == store_id).order_by(UserModel.created_at.asc())
+    ).scalars().first()
+    if user is None and settings is not None and settings.user_id:
+        user = session.get(UserModel, settings.user_id)
+    if user is not None and settings is None:
+        settings = get_or_create_settings(session, user.id)
+    if user is not None and settings is not None and not settings.user_id:
+        settings.user_id = user.id
+        session.add(settings)
+    return user, settings
+
+
+def _label_api_settings_incomplete(settings: AppSettingsModel) -> bool:
+    return not all(
+        [
+            _label_api_text(settings.wb_api_token),
+            _label_api_text(settings.teksher_username),
+            _label_api_text(settings.teksher_password),
+            _label_api_text(settings.teksher_transgran_recipient_name),
+            _label_api_text(settings.teksher_transgran_recipient_inn),
+            _label_api_text(settings.teksher_transgran_recipient_kpp),
+        ]
+    )
+
+
+def _label_api_missing_mapping_sizes(session: Session, user_id: str, nm_id: str, sizes: list[str]) -> list[str]:
+    _, rows = teksher_mapping_service.latest_payload(session, user_id, nm_id)
+    rows_by_size = {_product_card_size_key(row.get("wb_size", "")): row for row in rows if row.get("gtin")}
+    return [size for size in sizes if _product_card_size_key(size) not in rows_by_size]
+
+
+def _normalize_label_api_print_payload(payload: dict) -> dict:
+    request_id = _label_api_text(payload.get("requestId"))
+    wb_store_id = _label_api_text(payload.get("wbStoreId"))
+    nm_id = _label_api_text(payload.get("nmId"))
+    if not request_id:
+        raise ValueError("requestId is required.")
+    if not wb_store_id:
+        raise ValueError("wbStoreId is required.")
+    if not nm_id:
+        raise ValueError("nmId is required.")
+
+    raw_items = payload.get("items")
+    if not isinstance(raw_items, list):
+        raise ValueError("items must be an array.")
+    items: list[dict] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        size = _label_api_text(item.get("size"))
+        try:
+            quantity = int(item.get("quantity") or 0)
+        except (TypeError, ValueError):
+            quantity = 0
+        if not size or quantity <= 0:
+            continue
+        items.append({"size": size, "quantity": quantity})
+    if not items:
+        raise ValueError("items must contain at least one row with quantity > 0.")
+
+    return {
+        "requestId": request_id,
+        "wbStoreId": wb_store_id,
+        "storeName": _label_api_text(payload.get("storeName")),
+        "nmId": nm_id,
+        "vendorCode": _label_api_text(payload.get("vendorCode")),
+        "template": _product_card_label_template(_label_api_text(payload.get("template")) or "srad"),
+        "items": items,
+    }
+
+
+def _label_api_request_hash(payload: dict) -> str:
+    stable = {
+        **payload,
+        "items": sorted(payload["items"], key=lambda item: (item["size"], item["quantity"])),
+    }
+    encoded = json.dumps(stable, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _label_api_existing_job(session: Session, wb_store_id: str, request_id: str) -> LabelApiJobModel | None:
+    return session.execute(
+        select(LabelApiJobModel)
+        .where(LabelApiJobModel.wb_store_id == wb_store_id)
+        .where(LabelApiJobModel.request_id == request_id)
+    ).scalars().first()
+
+
+def _label_api_workflow_rows(mapping_rows: list[dict], items: list[dict]) -> list[dict]:
+    mapping_by_size = {_product_card_size_key(row.get("wb_size", "")): row for row in mapping_rows if row.get("gtin")}
+    rows: list[dict] = []
+    for item in items:
+        mapping = mapping_by_size.get(_product_card_size_key(item["size"]))
+        if not mapping:
+            continue
+        rows.append(
+            {
+                "size": item["size"],
+                "gtin": _label_api_text(mapping.get("gtin")),
+                "quantity": int(item["quantity"]),
+                "transgran": True,
+            }
+        )
+    return rows
+
+
+def _label_api_missing_item_sizes(workflow_rows: list[dict], items: list[dict]) -> list[str]:
+    found = {_product_card_size_key(row.get("size", "")) for row in workflow_rows if row.get("gtin")}
+    return [item["size"] for item in items if _product_card_size_key(item["size"]) not in found]
+
+
+def _refresh_label_api_job(request: Request, session: Session, job: LabelApiJobModel) -> None:
+    if job.status in {"done", "error"}:
+        return
+    if not job.run_id:
+        job.status = "error"
+        job.error = "Workflow run is not linked."
+        for row in job.rows:
+            row.status = "error"
+            row.error_message = job.error
+        session.flush()
+        return
+
+    run = session.get(WorkflowRunModel, job.run_id)
+    if run is None:
+        job.status = "error"
+        job.error = "Workflow run not found."
+        for row in job.rows:
+            row.status = "error"
+            row.error_message = job.error
+        session.flush()
+        return
+
+    items_by_size = {_product_card_size_key(item.size): item for item in run.items}
+    has_failed = False
+    all_completed = bool(job.rows)
+    for row in job.rows:
+        item = items_by_size.get(_product_card_size_key(row.size))
+        if item is None:
+            row.status = "emission"
+            all_completed = False
+            continue
+        row.workflow_run_item_id = item.id
+        if item.status == "failed":
+            row.status = "error"
+            row.error_message = item.error or "Не удалось создать этикетки"
+            has_failed = True
+            all_completed = False
+            continue
+        if item.status == "completed":
+            row.status = "ready" if job.pdf_file_id else "transgran"
+            row.error_message = ""
+            continue
+        row.status = _label_api_row_status(item.status)
+        row.error_message = ""
+        all_completed = False
+
+    if has_failed or run.status == "partial_failed":
+        job.status = "error"
+        job.error = job.error or "Одна или несколько строк завершились ошибкой."
+        for row in job.rows:
+            if row.status != "ready":
+                row.status = "error" if row.status != "ready" else row.status
+                row.error_message = row.error_message or job.error
+        session.flush()
+        return
+
+    if all_completed and not job.pdf_file_id:
+        try:
+            _create_label_api_job_pdf(request, session, job)
+        except Exception as exc:
+            job.status = "error"
+            job.error = str(exc)
+            for row in job.rows:
+                row.status = "error"
+                row.error_message = job.error
+            session.flush()
+            return
+
+    if job.pdf_file_id:
+        job.status = "done"
+        job.error = ""
+        pdf_url = _label_api_file_url(request, job.pdf_file_id)
+        job.pdf_url = pdf_url
+        for row in job.rows:
+            row.status = "ready"
+            row.pdf_url = pdf_url
+            row.error_message = ""
+    else:
+        job.status = "processing" if run.status == "running" else "queued"
+    session.flush()
+
+
+def _label_api_row_status(item_status: str) -> str:
+    if item_status in {"pending", "created", "order_running", "order_created", "order_completed"}:
+        return "emission"
+    if item_status in {"marking_running", "marking_created", "marking_completed", "csv_saved"}:
+        return "applying"
+    if item_status == "transgran_running":
+        return "transgran"
+    return "emission"
+
+
+def _create_label_api_job_pdf(request: Request, session: Session, job: LabelApiJobModel) -> None:
+    if not job.user_id:
+        raise ValueError("Job user is not linked.")
+    settings = get_or_create_settings(session, job.user_id)
+    config = settings_to_app_config(settings)
+    product_card = product_card_service.build_template(job.nm_id, config)
+    version, mapping_rows = teksher_mapping_service.latest_payload(session, job.user_id, product_card.wb_article)
+    product_card = teksher_mapping_service.apply_payload(product_card, mapping_rows, version)
+
+    product_rows_by_size = {_product_card_size_key(row.wb_size): row for row in product_card.rows}
+    job_rows_by_size = {_product_card_size_key(row.size): row for row in job.rows}
+    label_settings = _product_card_label_settings(session, job.user_id)
+    run_items = session.execute(
+        select(WorkflowRunItemModel)
+        .where(WorkflowRunItemModel.run_id == job.run_id)
+        .order_by(WorkflowRunItemModel.size)
+    ).scalars().all()
+
+    sources: list[dict] = []
+    total = 0
+    for item in run_items:
+        size_key = _product_card_size_key(item.size)
+        job_row = job_rows_by_size.get(size_key)
+        product_row = product_rows_by_size.get(size_key)
+        if job_row is None or product_row is None:
+            continue
+        codes = _product_card_item_mark_codes(session, item)
+        if not codes:
+            raise ValueError(f"Нет кодов маркировки для размера {item.size}.")
+        sources.append({"item": item, "row": product_row, "job_row": job_row, "mark_codes": codes})
+        total += len(codes)
+
+    if not sources:
+        raise ValueError("Нет готовых кодов маркировки для печати.")
+
+    labels = []
+    for source in sources:
+        item = source["item"]
+        row = source["row"]
+        for code in source["mark_codes"]:
+            labels.append(
+                make_label_record(
+                    template=job.template,
+                    item_name=_product_card_label_item_name(product_card, row),
+                    vendor_code=item.vendor_code or row.vendor_article or product_card.wb_summary.seller_article,
+                    size=item.size or row.wb_size,
+                    color=_lowercase_text(row.color or product_card.wb_summary.color),
+                    composition=row.composition or product_card.wb_summary.composition,
+                    wb_barcode=item.barcode or row.barcode,
+                    mark_code=code,
+                    unit_count="1",
+                    index=len(labels) + 1,
+                    total=total,
+                    supplier_name=label_settings["supplier_name"],
+                    production_date=label_settings["production_date"],
+                    country_of_origin=row.country or product_card.wb_summary.country,
+                    brand=row.trademark or product_card.wb_summary.brand,
+                    supplier_address=label_settings["production_address"],
+                )
+            )
+
+    pdf = render_labels_pdf(labels, template=job.template)
+    file_id = uuid.uuid4().hex
+    file_name = f"wb_{product_card.wb_article}_{file_id[:8]}_58x40.pdf"
+    file_path = _label_pdf_file_path(job.user_id, file_id)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_bytes(pdf)
+
+    for source in sources:
+        item = source["item"]
+        row = source["row"]
+        job_row = source["job_row"]
+        session.add(
+            LabelPrintJobModel(
+                user_id=job.user_id,
+                wb_article=product_card.wb_article,
+                wb_size=item.size or row.wb_size,
+                gtin=item.gtin,
+                barcode=item.barcode or row.barcode,
+                vendor_code=item.vendor_code or row.vendor_article or product_card.wb_summary.seller_article,
+                quantity=len(source["mark_codes"]),
+                template=job.template,
+                file_id=file_id,
+                file_name=file_name,
+                status="created",
+            )
+        )
+        job_row.status = "ready"
+        job_row.pdf_url = _label_api_file_url(request, file_id)
+
+    job.pdf_file_id = file_id
+    job.pdf_url = _label_api_file_url(request, file_id)
+    session.flush()
+
+
+def _serialize_label_api_job(request: Request, job: LabelApiJobModel) -> dict:
+    rows = sorted(job.rows, key=lambda row: _label_api_size_sort_key(row.size))
+    payload = {
+        "jobId": job.id,
+        "status": job.status,
+        "rows": [_serialize_label_api_job_row(row) for row in rows],
+    }
+    if job.pdf_file_id:
+        payload["pdfUrl"] = _label_api_file_url(request, job.pdf_file_id)
+    if job.error:
+        payload["errorMessage"] = job.error
+    return payload
+
+
+def _serialize_label_api_job_row(row: LabelApiJobRowModel) -> dict:
+    payload = {
+        "size": row.size,
+        "quantity": row.quantity,
+        "status": row.status,
+    }
+    if row.pdf_url:
+        payload["pdfUrl"] = row.pdf_url
+    if row.error_message:
+        payload["errorMessage"] = row.error_message
+    return payload
+
+
+def _label_api_file_url(request: Request, file_id: str) -> str:
+    return str(request.url_for("download_label_api_pdf", file_id=file_id))
+
+
+def _label_api_sizes(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        text = _label_api_text(item)
+        key = _product_card_size_key(text)
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+    return result
+
+
+def _label_api_text(value) -> str:
+    return str(value or "").strip()
+
+
+def _label_api_size_sort_key(value: str) -> tuple[int, str]:
+    text = _label_api_text(value)
+    try:
+        return (0, f"{int(text):06d}")
+    except ValueError:
+        return (1, text.casefold())
 
 
 def _settings_incomplete(settings: AppSettingsModel) -> bool:

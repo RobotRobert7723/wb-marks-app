@@ -49,6 +49,7 @@ def _config_from_env() -> AppConfig:
         database_url=os.getenv("DATABASE_URL", "sqlite:///./wb_marks_app.db"),
         database_schema=os.getenv("DATABASE_SCHEMA", "").strip(),
         secret_key=os.getenv("SECRET_KEY", ""),
+        label_api_token=os.getenv("LABEL_API_TOKEN", "").strip(),
         artifact_storage_dir=os.getenv("ARTIFACT_STORAGE_DIR", ""),
         output_dir=os.getenv("OUTPUT_DIR", ""),
         wb_api_base_url=os.getenv("WB_API_BASE_URL", "").strip(),

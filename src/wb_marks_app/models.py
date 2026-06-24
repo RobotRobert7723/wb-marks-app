@@ -16,6 +16,7 @@ class AppConfig:
     database_url: str = "sqlite:///./wb_marks_app.db"
     database_schema: str = ""
     secret_key: str = ""
+    label_api_token: str = ""
     artifact_storage_dir: str = ""
     mapping_csv_path: str = ""
     output_dir: str = ""

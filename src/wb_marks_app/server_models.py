@@ -245,6 +245,64 @@ class LabelPrintJobModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
 
 
+class LabelApiJobModel(Base):
+    __tablename__ = "label_api_jobs"
+    __table_args__ = (
+        UniqueConstraint("wb_store_id", "request_id", name="uq_label_api_job_store_request"),
+        {"schema": SCHEMA} if SCHEMA else {},
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: f"job_{uuid4().hex}")
+    request_id: Mapped[str] = mapped_column(String(255), index=True)
+    request_hash: Mapped[str] = mapped_column(String(64))
+    wb_store_id: Mapped[str] = mapped_column(String(64), index=True)
+    store_name: Mapped[str] = mapped_column(String(255), default="")
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey(_fk("users.id"), ondelete="SET NULL"), index=True, nullable=True)
+    nm_id: Mapped[str] = mapped_column(String(64), index=True)
+    vendor_code: Mapped[str] = mapped_column(String(255), default="")
+    template: Mapped[str] = mapped_column(String(32), default="srad")
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    run_id: Mapped[str | None] = mapped_column(String(36), ForeignKey(_fk("workflow_runs.id"), ondelete="SET NULL"), index=True, nullable=True)
+    pdf_file_id: Mapped[str] = mapped_column(String(32), index=True, default="")
+    pdf_url: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, onupdate=_utc_now)
+
+    rows: Mapped[list["LabelApiJobRowModel"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class LabelApiJobRowModel(Base):
+    __tablename__ = "label_api_job_rows"
+    __table_args__ = (
+        UniqueConstraint("job_id", "size", name="uq_label_api_job_row_size"),
+        {"schema": SCHEMA} if SCHEMA else {},
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    job_id: Mapped[str] = mapped_column(ForeignKey(_fk("label_api_jobs.id"), ondelete="CASCADE"), index=True)
+    size: Mapped[str] = mapped_column(String(64), index=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    gtin: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(32), default="emission", index=True)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    pdf_url: Mapped[str] = mapped_column(Text, default="")
+    workflow_run_item_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(_fk("workflow_run_items.id"), ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, onupdate=_utc_now)
+
+    job: Mapped["LabelApiJobModel"] = relationship(back_populates="rows")
+
+
 class PasswordResetTokenModel(Base):
     __tablename__ = "password_reset_tokens"
     __table_args__ = (
