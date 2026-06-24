@@ -156,7 +156,7 @@
     width: 100%;
   }
   .print-history-table {
-    min-width: 980px;
+    min-width: 1180px;
     width: 100%;
   }
   .order-history-table th,
@@ -170,6 +170,25 @@
   }
   .order-history-op { white-space: normal; }
   .order-history-op strong { display: block; }
+  .repeat-print-cell { white-space: normal; }
+  .repeat-print-control {
+    align-items: center;
+    display: flex;
+    gap: 8px;
+  }
+  .repeat-print-control select {
+    border: 1px solid #cfd4dc;
+    border-radius: 6px;
+    color: #1d2939;
+    font: inherit;
+    min-height: 28px;
+    padding: 3px 8px;
+    width: 100px;
+  }
+  .repeat-print-control button {
+    min-width: 86px;
+    padding: 6px 10px;
+  }
   .section-title { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; }
   .section-title h2 { margin: 0; }
   .split-actions { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; }
@@ -607,13 +626,14 @@
     <div class="table-scroll">
       <table class="mapping-table print-history-table">
         <colgroup>
+          <col style="width: 13%;" />
+          <col style="width: 6%;" />
+          <col style="width: 14%;" />
+          <col style="width: 6%;" />
+          <col style="width: 10%;" />
+          <col style="width: 14%;" />
+          <col style="width: 21%;" />
           <col style="width: 16%;" />
-          <col style="width: 8%;" />
-          <col style="width: 16%;" />
-          <col style="width: 8%;" />
-          <col style="width: 12%;" />
-          <col style="width: 18%;" />
-          <col style="width: 22%;" />
         </colgroup>
         <thead>
           <tr>
@@ -624,6 +644,7 @@
             <th class="template-head">Шаблон</th>
             <th class="template-head">Статус</th>
             <th class="template-head">PDF</th>
+            <th class="template-head">Повторная печать</th>
           </tr>
         </thead>
         <tbody id="print-history-body"></tbody>
@@ -838,6 +859,7 @@
         return;
       }
       setPrintLabelStatus(payload.message || 'PDF этикеток создан.', 'success');
+      clearReadyPrintCounts();
       if (payload.download_url) {
         window.open(payload.download_url, '_blank', 'noopener');
       }
@@ -902,6 +924,7 @@
       appendTextCell(tr, item.template || '');
       appendTextCell(tr, item.error || item.status || '', item.error ? 'error' : '');
       appendPrintPdfCell(tr, item);
+      appendPrintRepeatCell(tr, item);
       printHistoryBody.appendChild(tr);
     });
   }
@@ -960,6 +983,81 @@
       td.textContent = '-';
     }
     tr.appendChild(td);
+  }
+
+  function appendPrintRepeatCell(tr, item) {
+    const td = document.createElement('td');
+    td.className = 'template-cell repeat-print-cell';
+    if (!item.id) {
+      td.textContent = '-';
+      tr.appendChild(td);
+      return;
+    }
+
+    const control = document.createElement('div');
+    control.className = 'repeat-print-control';
+    const select = document.createElement('select');
+    [
+      { value: 'srad', label: 'SRad' },
+      { value: 'simple', label: 'Simple' },
+      { value: 'medium', label: 'Medium' },
+    ].forEach((template) => {
+      const option = document.createElement('option');
+      option.value = template.value;
+      option.textContent = template.label;
+      select.appendChild(option);
+    });
+    select.value = labelTemplateSelect ? labelTemplateSelect.value : printTemplateValue(item.template);
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary';
+    button.textContent = 'Повторить';
+    button.addEventListener('click', () => {
+      repeatLabelPrint(item.id, select.value, button);
+    });
+
+    control.append(select, button);
+    td.appendChild(control);
+    tr.appendChild(td);
+  }
+
+  async function repeatLabelPrint(printId, template, button) {
+    if (!printId) return;
+    setPrintHistoryMessage('Готовим PDF для повторной печати...', '');
+    if (button) button.disabled = true;
+    try {
+      const response = await fetch(
+        `/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/label-prints/${encodeURIComponent(printId)}/repeat`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ template }),
+        }
+      );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.ok) {
+        setPrintHistoryMessage(payload.message || payload.detail || 'Не удалось создать PDF для повторной печати.', 'error');
+        return;
+      }
+      setPrintHistoryMessage(payload.message || 'PDF для повторной печати создан.', 'success');
+      if (payload.download_url) {
+        window.open(payload.download_url, '_blank', 'noopener');
+      }
+      clearReadyPrintCounts();
+      renderPrintHistory(payload.history || []);
+    } catch (error) {
+      setPrintHistoryMessage('Не удалось создать PDF для повторной печати.', 'error');
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  function printTemplateValue(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'simple') return 'simple';
+    if (normalized === 'medium') return 'medium';
+    return 'srad';
   }
 
   function findOperation(item, kind) {
@@ -1132,6 +1230,13 @@
       const quantity = Number.parseInt(item.quantity || '0', 10) || 0;
       cell.textContent = String(quantity);
       cell.title = String(quantity);
+    });
+  }
+
+  function clearReadyPrintCounts() {
+    document.querySelectorAll('[data-ready-print]').forEach((cell) => {
+      cell.textContent = '0';
+      cell.title = '0';
     });
   }
 

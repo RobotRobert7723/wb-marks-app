@@ -958,12 +958,122 @@ class ProductCardRouteTests(unittest.TestCase):
             webapp.session_scope = old_session_scope
             webapp._product_card_label_print_history = old_product_card_label_print_history
 
+    def test_label_print_repeat_endpoint_uses_print_history_row(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from wb_marks_app.models import AppConfig
+        from wb_marks_app.services.product_cards import ProductCardTemplate, ProductCardMappingRow, WbProductSummary
+
+        old_create_all = webapp.create_all
+        old_load_config = webapp.load_config
+        old_session_scope = webapp.session_scope
+        old_get_or_create_settings = webapp.get_or_create_settings
+        old_settings_to_app_config = webapp.settings_to_app_config
+        old_product_card_service = webapp.product_card_service
+        old_teksher_mapping_service = webapp.teksher_mapping_service
+        old_get_user_label_print_job = webapp._get_user_label_print_job
+        old_repeat_product_card_label_pdf = webapp._repeat_product_card_label_pdf
+        calls = []
+        print_job = object()
+        webapp.create_all = lambda: None
+        webapp.load_config = lambda: AppConfig(secret_key="test-secret")
+        webapp.session_scope = lambda: FakeSessionScope()
+        webapp.get_or_create_settings = lambda _session, _user_id: object()
+        webapp.settings_to_app_config = lambda _settings: AppConfig(wb_api_token="token")
+        webapp.teksher_mapping_service = FakeTeksherMappingService()
+        webapp._get_user_label_print_job = lambda session, print_id, user_id, wb_article: calls.append(
+            {
+                "print_id": print_id,
+                "user_id": user_id,
+                "wb_article": wb_article,
+            }
+        ) or print_job
+        webapp._repeat_product_card_label_pdf = lambda request, session, user_id, product_card, loaded_print_job, template: calls.append(
+            {
+                "repeat_user_id": user_id,
+                "product_card": product_card,
+                "print_job": loaded_print_job,
+                "template": template,
+            }
+        ) or {
+            "ok": True,
+            "download_url": "http://testserver/api/labels/pdf/file",
+            "labels_count": 1,
+            "history": [],
+        }
+        webapp.product_card_service = FakeProductCardService(
+            ProductCardTemplate(
+                wb_article="847012873",
+                image_url="",
+                api_status="",
+                wb_summary=WbProductSummary(
+                    name="Sport suit",
+                    seller_category="Sport suits",
+                    wb_article="847012873",
+                    tnved="6112120000",
+                    country="KG",
+                    seller_article="cv_nk_blue_smr",
+                    color="blue",
+                    composition="polyester 100%",
+                    gender="boys",
+                    brand="ErLine",
+                ),
+                rows=[
+                    ProductCardMappingRow(
+                        barcode="2049271462634",
+                        wb_size="38",
+                        ru_size="134",
+                        teksher_size="",
+                        product_type="",
+                        gtin="04709055620664",
+                        tnved="",
+                        country="",
+                        vendor_article="",
+                        color="",
+                        composition="",
+                        target_gender="",
+                        trademark="",
+                        ready_to_mark=0,
+                        print_count=0,
+                        order_count=0,
+                    )
+                ],
+            )
+        )
+        try:
+            app = webapp.create_app()
+            client = TestClient(app)
+            client.cookies.set("wb_marks_session", _session_cookie({"user_id": "user-1", "login": "tester"}, "test-secret"))
+
+            response = client.post(
+                "/api/product-cards/847012873/label-prints/print-1/repeat",
+                json={"template": "Simple"},
+            )
+
+            self.assertEqual(200, response.status_code)
+            payload = response.json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual("print-1", calls[0]["print_id"])
+            self.assertEqual("847012873", calls[0]["wb_article"])
+            self.assertEqual(print_job, calls[1]["print_job"])
+            self.assertEqual("simple", calls[1]["template"])
+            client.close()
+        finally:
+            webapp.create_all = old_create_all
+            webapp.load_config = old_load_config
+            webapp.session_scope = old_session_scope
+            webapp.get_or_create_settings = old_get_or_create_settings
+            webapp.settings_to_app_config = old_settings_to_app_config
+            webapp.product_card_service = old_product_card_service
+            webapp.teksher_mapping_service = old_teksher_mapping_service
+            webapp._get_user_label_print_job = old_get_user_label_print_job
+            webapp._repeat_product_card_label_pdf = old_repeat_product_card_label_pdf
+
     def test_ready_to_print_counts_use_latest_marking_operation(self) -> None:
         import wb_marks_app.webapp as webapp
         from sqlalchemy import create_engine
         from sqlalchemy.orm import Session
         from wb_marks_app.db import Base
-        from wb_marks_app.server_models import MarkCodeModel, TeksherOperationModel, WorkflowRunItemModel, WorkflowRunModel
+        from wb_marks_app.server_models import LabelPrintJobModel, MarkCodeModel, TeksherOperationModel, WorkflowRunItemModel, WorkflowRunModel
         from wb_marks_app.services.labels import GS
 
         engine = create_engine("sqlite:///:memory:", future=True)
@@ -1039,9 +1149,27 @@ class ProductCardRouteTests(unittest.TestCase):
             session.commit()
 
             counts = webapp._product_card_ready_to_print_counts(session, "user-1", "847012873")
+            print_job = LabelPrintJobModel(
+                user_id="user-1",
+                wb_article="847012873",
+                wb_size="40",
+                gtin="04709055620671",
+                barcode="2049271462641",
+                vendor_code="cv_nk_blue_smr",
+                quantity=2,
+                template="srad",
+                file_id="f" * 32,
+                file_name="labels.pdf",
+                status="created",
+                created_at=datetime(2026, 6, 23, 12, 0, tzinfo=timezone.utc),
+            )
+            session.add(print_job)
+            session.commit()
+            counts_after_print = webapp._product_card_ready_to_print_counts(session, "user-1", "847012873")
 
         self.assertEqual(0, counts["38"])
         self.assertEqual(2, counts["40"])
+        self.assertEqual(0, counts_after_print["40"])
 
     def test_product_card_label_pdf_helper_saves_print_history(self) -> None:
         import wb_marks_app.webapp as webapp
