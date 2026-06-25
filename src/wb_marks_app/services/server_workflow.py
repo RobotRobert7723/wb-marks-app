@@ -124,6 +124,9 @@ class WorkflowRunService:
         thread.start()
 
     def retry_failed_items(self, run_id: str) -> None:
+        self.retry_items(run_id, None)
+
+    def retry_items(self, run_id: str, item_ids: set[str] | None = None) -> None:
         with session_scope() as session:
             run = session.get(WorkflowRunModel, run_id)
             if run is None:
@@ -131,10 +134,85 @@ class WorkflowRunService:
             run.status = "running"
             run.error = ""
             for item in run.items:
-                if item.status == "failed":
+                if item.status == "failed" and (item_ids is None or item.id in item_ids):
                     item.status = "pending"
                     item.error = ""
         self.start_background(run_id)
+
+    def recover_manual_item(
+        self,
+        run_id: str,
+        item_id: str,
+        user_id: str,
+        marking_operation_id: str,
+        transgran_operation_id: str,
+    ) -> None:
+        marking_operation_id = str(marking_operation_id or "").strip()
+        transgran_operation_id = str(transgran_operation_id or "").strip()
+        if not marking_operation_id:
+            raise ValueError("marking_operation_id is required")
+        if not transgran_operation_id:
+            raise ValueError("transgran_operation_id is required")
+
+        with session_scope() as session:
+            run = session.get(WorkflowRunModel, run_id)
+            if run is None or run.user_id != user_id:
+                raise KeyError(run_id)
+            item = session.get(WorkflowRunItemModel, item_id)
+            if item is None or item.run_id != run.id:
+                raise KeyError(item_id)
+            settings = get_or_create_settings(session, user_id)
+            config = settings_to_app_config(settings)
+            artifact_root = Path(config.resolved_artifact_storage_dir()) / f"run_{run.id}"
+            artifact_root.mkdir(parents=True, exist_ok=True)
+            artifact_path = artifact_root / f"{item.vendor_code}_{item.size}.csv"
+            teksher = TeksherService(browser=_NullBrowser(), logger=lambda msg: None)
+
+            teksher.save_operation_csv(marking_operation_id, artifact_path, config)
+            codes = teksher.read_operation_codes(marking_operation_id, config)
+            if len(codes) < item.quantity:
+                raise ValueError(
+                    f"Teksher returned {len(codes)} marking codes for size {item.size}; expected {item.quantity}."
+                )
+            self._upsert_artifact(session, item, artifact_path)
+            self._replace_mark_codes(session, item, codes[: item.quantity])
+
+            marking_op = self._find_operation(session, item, "marking")
+            if marking_op is None:
+                marking_op = TeksherOperationModel(
+                    run_item_id=item.id,
+                    operation_kind="marking",
+                    external_operation_id=marking_operation_id,
+                    status="ACCEPTED",
+                    payload_json=json.dumps({"manual_recovery": True}, ensure_ascii=True),
+                )
+                session.add(marking_op)
+            else:
+                marking_op.external_operation_id = marking_operation_id
+                marking_op.status = "ACCEPTED"
+                marking_op.payload_json = json.dumps({"manual_recovery": True}, ensure_ascii=True)
+
+            transgran_op = self._find_operation(session, item, "transgran")
+            payload_json = json.dumps({"manual_recovery": True}, ensure_ascii=True)
+            if transgran_op is None:
+                transgran_op = TeksherOperationModel(
+                    run_item_id=item.id,
+                    operation_kind="transgran",
+                    external_operation_id=transgran_operation_id,
+                    status="created",
+                    payload_json=payload_json,
+                )
+                session.add(transgran_op)
+            else:
+                transgran_op.external_operation_id = transgran_operation_id
+                transgran_op.status = "created"
+                transgran_op.payload_json = payload_json
+
+            item.status = "completed"
+            item.error = ""
+            if not item.document_number:
+                item.document_number = self._document_number(run, item, config)
+            self._update_run_status(session, run)
 
     def cancel_run(self, run_id: str) -> None:
         with session_scope() as session:
@@ -183,7 +261,7 @@ class WorkflowRunService:
                 if run is None or run.status == "cancelled":
                     return
                 item = session.get(WorkflowRunItemModel, item_id)
-                if item is None or item.status == "completed":
+                if item is None or item.status in {"completed", "failed"}:
                     continue
                 if not run.user_id:
                     raise ValueError(f"Run {run_id} has no user_id")
@@ -200,24 +278,7 @@ class WorkflowRunService:
                 return
             if run.status == "cancelled":
                 return
-            failed = sum(1 for item in run.items if item.status == "failed")
-            completed = sum(1 for item in run.items if item.status == "completed")
-            run.status = "partial_failed" if failed else "completed"
-            try:
-                summary = json.loads(run.summary_json or "{}")
-            except json.JSONDecodeError:
-                summary = {}
-            summary.update(
-                {
-                    "completed_items": completed,
-                    "failed_items": failed,
-                    "total_items": len(run.items),
-                }
-            )
-            run.summary_json = json.dumps(
-                summary,
-                ensure_ascii=True,
-            )
+            self._update_run_status(session, run)
 
     def _run_item_ids(self, run_id: str) -> list[str]:
         with session_scope() as session:
@@ -301,7 +362,12 @@ class WorkflowRunService:
             if not artifact_path.exists():
                 teksher.save_operation_csv(marking_op.external_operation_id, artifact_path, config)
             self._upsert_artifact(session, item, artifact_path)
-            self._store_mark_codes(session, item, teksher.read_operation_codes(marking_op.external_operation_id, config))
+            codes = teksher.read_operation_codes(marking_op.external_operation_id, config)
+            if len(codes) < item.quantity:
+                raise ValueError(
+                    f"Teksher returned {len(codes)} marking codes for size {item.size}; expected {item.quantity}."
+                )
+            self._replace_mark_codes(session, item, codes[: item.quantity])
             item.status = "csv_saved"
             session.commit()
 
@@ -356,7 +422,6 @@ class WorkflowRunService:
         except Exception as exc:
             item.status = "failed"
             item.error = str(exc)
-            run.status = "partial_failed"
             session.commit()
             raise
 
@@ -411,6 +476,51 @@ class WorkflowRunService:
             return
         for index, code in enumerate(codes, start=1):
             session.add(MarkCodeModel(run_item_id=item.id, position=index, mark_code=code))
+        session.flush()
+
+    def _replace_mark_codes(self, session: Session, item: WorkflowRunItemModel, codes: list[str]) -> None:
+        for existing in session.execute(
+            select(MarkCodeModel).where(MarkCodeModel.run_item_id == item.id)
+        ).scalars().all():
+            session.delete(existing)
+        session.flush()
+        for index, code in enumerate(codes, start=1):
+            session.add(MarkCodeModel(run_item_id=item.id, position=index, mark_code=code))
+        session.flush()
+
+    def _update_run_status(self, session: Session, run: WorkflowRunModel) -> None:
+        active_statuses = {
+            "pending",
+            "created",
+            "order_running",
+            "order_created",
+            "order_completed",
+            "marking_running",
+            "marking_created",
+            "marking_completed",
+            "csv_saved",
+            "transgran_running",
+        }
+        failed = sum(1 for item in run.items if item.status == "failed")
+        completed = sum(1 for item in run.items if item.status == "completed")
+        active = sum(1 for item in run.items if item.status in active_statuses)
+        if active:
+            run.status = "running"
+        else:
+            run.status = "partial_failed" if failed else "completed"
+        try:
+            summary = json.loads(run.summary_json or "{}")
+        except json.JSONDecodeError:
+            summary = {}
+        summary.update(
+            {
+                "completed_items": completed,
+                "failed_items": failed,
+                "active_items": active,
+                "total_items": len(run.items),
+            }
+        )
+        run.summary_json = json.dumps(summary, ensure_ascii=True)
         session.flush()
 
     def _document_number(self, run: WorkflowRunModel, item: WorkflowRunItemModel, config: AppConfig) -> str:

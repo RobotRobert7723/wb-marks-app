@@ -170,6 +170,12 @@
   }
   .order-history-op { white-space: normal; }
   .order-history-op strong { display: block; }
+  .order-action-cell { white-space: normal; }
+  .order-action-cell button {
+    margin: 2px 4px 2px 0;
+    min-width: 86px;
+    padding: 5px 8px;
+  }
   .repeat-print-cell { white-space: normal; }
   .repeat-print-control {
     align-items: center;
@@ -373,7 +379,7 @@
           <col style="width: 7%;" />
           <col style="width: 7%;" />
           <col style="width: 7%;" />
-          <col style="width: 10%;" />
+          <col style="width: 9%;" />
           <col style="width: 7%;" />
           <col style="width: 11%;" />
           <col style="width: 7%;" />
@@ -593,13 +599,14 @@
         <colgroup>
           <col style="width: 10%;" />
           <col style="width: 5%;" />
-          <col style="width: 12%;" />
+          <col style="width: 11%;" />
           <col style="width: 5%;" />
-          <col style="width: 13%;" />
-          <col style="width: 15%;" />
-          <col style="width: 15%;" />
-          <col style="width: 15%;" />
-          <col style="width: 10%;" />
+          <col style="width: 12%;" />
+          <col style="width: 14%;" />
+          <col style="width: 14%;" />
+          <col style="width: 14%;" />
+          <col style="width: 8%;" />
+          <col style="width: 8%;" />
         </colgroup>
         <thead>
           <tr>
@@ -612,6 +619,7 @@
             <th class="template-head">Нанесение</th>
             <th class="template-head">Трансгран</th>
             <th class="template-head">CSV</th>
+            <th class="template-head">Действия</th>
           </tr>
         </thead>
         <tbody id="order-history-body"></tbody>
@@ -898,6 +906,7 @@
       appendOperationCell(tr, item, 'marking');
       appendOperationCell(tr, item, 'transgran');
       appendCsvCell(tr, item);
+      appendOrderActionCell(tr, run, item);
       orderHistoryBody.appendChild(tr);
     });
   }
@@ -1026,6 +1035,93 @@
       td.textContent = '-';
     }
     tr.appendChild(td);
+  }
+
+  function appendOrderActionCell(tr, run, item) {
+    const td = document.createElement('td');
+    td.className = 'template-cell order-action-cell';
+    if (item.status === 'failed' && run.id && item.id) {
+      appendOrderRetryButton(td, run.id, item.id);
+      appendOrderRecoverButton(td, run.id, item.id);
+    } else {
+      td.textContent = '-';
+    }
+    tr.appendChild(td);
+  }
+
+  function appendOrderRetryButton(container, runId, itemId) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary';
+    button.textContent = 'Продолжить';
+    button.addEventListener('click', () => retryMarkOrderItem(runId, itemId, button));
+    container.appendChild(button);
+  }
+
+  function appendOrderRecoverButton(container, runId, itemId) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary';
+    button.textContent = 'Восстановить';
+    button.addEventListener('click', () => recoverMarkOrderItem(runId, itemId, button));
+    container.appendChild(button);
+  }
+
+  async function retryMarkOrderItem(runId, itemId, button) {
+    if (!runId || !itemId) return;
+    if (button) button.disabled = true;
+    setOrderHistoryMessage('Продолжаем строку заказа...', '');
+    try {
+      const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/mark-orders/${encodeURIComponent(runId)}/items/${encodeURIComponent(itemId)}/retry`, {
+        method: 'POST',
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.ok) {
+        setOrderHistoryMessage(payload.message || payload.detail || 'Не удалось продолжить строку заказа.', 'error');
+        return;
+      }
+      currentMarkOrderRunId = runId;
+      applyMarkOrderStatus(payload.status || {});
+      await loadOrderHistory(true);
+      scheduleMarkOrderPolling();
+      setOrderHistoryMessage('', '');
+    } catch (error) {
+      setOrderHistoryMessage('Не удалось продолжить строку заказа.', 'error');
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  async function recoverMarkOrderItem(runId, itemId, button) {
+    if (!runId || !itemId) return;
+    const markingId = window.prompt('ID операции нанесения Текшер', '');
+    if (!markingId || !markingId.trim()) return;
+    const transgranId = window.prompt('ID операции трансграна Текшер', '');
+    if (!transgranId || !transgranId.trim()) return;
+    if (button) button.disabled = true;
+    setOrderHistoryMessage('Восстанавливаем строку заказа...', '');
+    try {
+      const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/mark-orders/${encodeURIComponent(runId)}/items/${encodeURIComponent(itemId)}/recover-manual`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          marking_operation_id: markingId.trim(),
+          transgran_operation_id: transgranId.trim(),
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.ok) {
+        setOrderHistoryMessage(payload.message || payload.detail || 'Не удалось восстановить строку заказа.', 'error');
+        return;
+      }
+      applyMarkOrderStatus(payload.status || {});
+      await loadOrderHistory(true);
+      setOrderHistoryMessage('Строка заказа восстановлена.', 'success');
+    } catch (error) {
+      setOrderHistoryMessage('Не удалось восстановить строку заказа.', 'error');
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
   function appendPrintPdfCell(tr, item) {
@@ -1248,11 +1344,12 @@
     const items = Array.isArray(payload.items) ? payload.items : [];
     items.forEach((item) => {
       const isError = item.status === 'failed' || Boolean(item.error);
-      setOrderRowStatus(item.size || '', item.status_text || item.error || item.status || '', isError ? 'error' : '');
+      setOrderRowStatus(item.size || '', item.status_text || item.error || item.status || '', isError ? 'error' : '', item);
       updateReadyPrintCount(item);
     });
     const runStatus = payload.run && payload.run.status ? payload.run.status : '';
-    if (runStatus === 'completed' || runStatus === 'partial_failed' || runStatus === 'cancelled') {
+    const hasActiveRows = items.some((item) => isActiveOrderItem(item.status || ''));
+    if ((runStatus === 'completed' || runStatus === 'partial_failed' || runStatus === 'cancelled') && !hasActiveRows) {
       if (markOrderPollTimer) clearInterval(markOrderPollTimer);
       markOrderPollTimer = null;
       currentMarkOrderRunId = '';
@@ -1267,26 +1364,52 @@
     }
   }
 
-  function setOrderRowStatus(size, message, kind) {
+  function isActiveOrderItem(status) {
+    return [
+      'pending',
+      'created',
+      'order_running',
+      'order_created',
+      'order_completed',
+      'marking_running',
+      'marking_created',
+      'marking_completed',
+      'csv_saved',
+      'transgran_running',
+    ].includes(String(status || ''));
+  }
+
+  function setOrderRowStatus(size, message, kind, item = null) {
     document.querySelectorAll('tr[data-order-row-size]').forEach((tr) => {
       if (normalize(tr.dataset.orderRowSize || '') !== normalize(size)) return;
       const cell = tr.querySelector('[data-order-status]');
       if (!cell) return;
-      cell.textContent = message || '';
+      cell.replaceChildren();
+      const statusText = document.createElement('span');
+      statusText.textContent = message || '';
+      cell.appendChild(statusText);
       cell.title = message || '';
       cell.classList.toggle('error', kind === 'error');
+      if (item && item.status === 'failed' && currentMarkOrderRunId && item.id) {
+        cell.appendChild(document.createElement('br'));
+        appendOrderRetryButton(cell, currentMarkOrderRunId, item.id);
+      }
     });
   }
 
   function updateReadyPrintCount(item) {
+    const hasExplicitCount = Object.prototype.hasOwnProperty.call(item || {}, 'ready_to_print_count');
+    const explicitCount = hasExplicitCount ? Number.parseInt(item.ready_to_print_count, 10) : Number.NaN;
     const operations = Array.isArray(item.operations) ? item.operations : [];
     const marking = operations.find((operation) => operation.kind === 'marking');
-    if (!marking || String(marking.status || '').toUpperCase() !== 'ACCEPTED') return;
+    if (!Number.isFinite(explicitCount) && (!marking || String(marking.status || '').toUpperCase() !== 'ACCEPTED')) return;
     document.querySelectorAll('tr[data-print-row-size]').forEach((tr) => {
       if (normalize(tr.dataset.printRowSize || '') !== normalize(item.size || '')) return;
       const cell = tr.querySelector('[data-ready-print]');
       if (!cell) return;
-      const quantity = Number.parseInt(item.quantity || '0', 10) || 0;
+      const quantity = Number.isFinite(explicitCount)
+        ? explicitCount
+        : (Number.parseInt(item.quantity || '0', 10) || 0);
       cell.textContent = String(quantity);
       cell.title = String(quantity);
     });

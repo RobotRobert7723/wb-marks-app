@@ -156,6 +156,184 @@ class SellerLabelsApiTests(unittest.TestCase):
             self.assertEqual(200, pdf.status_code)
             self.assertEqual(b"%PDF\n/Type /Page\n/Type /Pages\n", pdf.content)
 
+    def test_print_job_keeps_polling_until_rows_are_terminal(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from wb_marks_app.server_models import (
+            LabelApiJobModel,
+            LabelApiJobRowModel,
+            LabelPrintJobModel,
+            MarkCodeModel,
+            WorkflowRunItemModel,
+            WorkflowRunModel,
+        )
+        from wb_marks_app.services.labels import GS
+        from wb_marks_app.services.product_cards import ProductCardMappingRow, ProductCardTemplate, WbProductSummary
+
+        row_36 = ProductCardMappingRow(
+            barcode="2049271462634",
+            wb_size="36",
+            ru_size="134",
+            teksher_size="36",
+            product_type="Костюм спортивный",
+            gtin="04709055620664",
+            tnved="6112120000",
+            country="КЫРГЫЗСТАН",
+            vendor_article="Adi_black_line_01",
+            color="ГОЛУБОЙ",
+            composition="полиэстер 100%",
+            target_gender="УНИВЕРСАЛЬНЫЙ (УНИСЕКС)",
+            trademark="ErLine",
+            ready_to_mark=0,
+            print_count=0,
+            order_count=0,
+            full_name="Костюм спортивный",
+        )
+        row_40 = ProductCardMappingRow(
+            barcode="2049271462641",
+            wb_size="40",
+            ru_size="140",
+            teksher_size="40",
+            product_type="Костюм спортивный",
+            gtin="04709055620664",
+            tnved="6112120000",
+            country="КЫРГЫЗСТАН",
+            vendor_article="Adi_black_line_01",
+            color="ГОЛУБОЙ",
+            composition="полиэстер 100%",
+            target_gender="УНИВЕРСАЛЬНЫЙ (УНИСЕКС)",
+            trademark="ErLine",
+            ready_to_mark=0,
+            print_count=0,
+            order_count=0,
+            full_name="Костюм спортивный",
+        )
+        product_card = ProductCardTemplate(
+            wb_article="336603350",
+            image_url="",
+            api_status="",
+            wb_summary=WbProductSummary(
+                name="Sport suit",
+                seller_category="Sport suits",
+                wb_article="336603350",
+                tnved="6112120000",
+                country="Киргизия",
+                seller_article="Adi_black_line_01",
+                color="голубой",
+                composition="полиэстер 100%",
+                gender="Детский",
+                brand="ErLine",
+            ),
+            rows=[row_36, row_40],
+        )
+
+        def mark_code(serial: str) -> str:
+            return "010470905562066421" + serial + GS + "91EE12" + GS + "92" + ("A" * 44)
+
+        with _patched_app(webapp, product_card=product_card) as client:
+            context = client._test_context
+            with Session(context["engine"]) as session:
+                run = WorkflowRunModel(
+                    id="run-partial",
+                    user_id="user-1",
+                    draft_id="CARD-336603350-partial",
+                    source_url="/product-cards/336603350",
+                    status="running",
+                    created_at=datetime(2026, 6, 24, 10, 0, tzinfo=timezone.utc),
+                )
+                item_36 = WorkflowRunItemModel(
+                    run=run,
+                    barcode="2049271462634",
+                    vendor_code="Adi_black_line_01",
+                    size="36",
+                    gtin="04709055620664",
+                    quantity=2,
+                    status="completed",
+                    wb_item_name="Sport suit",
+                )
+                item_38 = WorkflowRunItemModel(
+                    run=run,
+                    barcode="2049271462635",
+                    vendor_code="Adi_black_line_01",
+                    size="38",
+                    gtin="04709055620664",
+                    quantity=1,
+                    status="failed",
+                    error="Balance is too low.",
+                    wb_item_name="Sport suit",
+                )
+                item_40 = WorkflowRunItemModel(
+                    run=run,
+                    barcode="2049271462641",
+                    vendor_code="Adi_black_line_01",
+                    size="40",
+                    gtin="04709055620664",
+                    quantity=1,
+                    status="order_running",
+                    wb_item_name="Sport suit",
+                )
+                session.add_all([run, item_36, item_38, item_40])
+                session.flush()
+                session.add_all(
+                    [
+                        MarkCodeModel(run_item=item_36, position=1, mark_code=mark_code("SERIAL-A")),
+                        MarkCodeModel(run_item=item_36, position=2, mark_code=mark_code("SERIAL-B")),
+                        MarkCodeModel(run_item=item_36, position=3, mark_code=mark_code("EXTRA-C")),
+                    ]
+                )
+                job = LabelApiJobModel(
+                    request_id="wb-labels-partial",
+                    request_hash="hash",
+                    wb_store_id="4006282",
+                    user_id="user-1",
+                    nm_id="336603350",
+                    vendor_code="Adi_black_line_01",
+                    template="srad",
+                    status="processing",
+                    run_id=run.id,
+                )
+                session.add(job)
+                session.flush()
+                session.add_all(
+                    [
+                        LabelApiJobRowModel(job_id=job.id, size="36", quantity=2, gtin="04709055620664"),
+                        LabelApiJobRowModel(job_id=job.id, size="38", quantity=1, gtin="04709055620664"),
+                        LabelApiJobRowModel(job_id=job.id, size="40", quantity=1, gtin="04709055620664"),
+                    ]
+                )
+                session.commit()
+                job_id = job.id
+                item_40_id = item_40.id
+
+            status = client.get(f"/api/v1/labels/print-jobs/{job_id}", headers=_auth_headers())
+            payload = status.json()
+            self.assertEqual("processing", payload["status"])
+            statuses = {row["size"]: row for row in payload["rows"]}
+            self.assertEqual("transgran", statuses["36"]["status"])
+            self.assertEqual("error", statuses["38"]["status"])
+            self.assertEqual("emission", statuses["40"]["status"])
+
+            with Session(context["engine"]) as session:
+                item_40 = session.get(WorkflowRunItemModel, item_40_id)
+                item_40.status = "completed"
+                run = session.get(WorkflowRunModel, "run-partial")
+                run.status = "partial_failed"
+                session.add(MarkCodeModel(run_item=item_40, position=1, mark_code=mark_code("SERIAL-D")))
+                session.commit()
+
+            final = client.get(f"/api/v1/labels/print-jobs/{job_id}", headers=_auth_headers())
+            final_payload = final.json()
+            self.assertEqual("partial_failed", final_payload["status"])
+            final_rows = {row["size"]: row for row in final_payload["rows"]}
+            self.assertEqual("ready", final_rows["36"]["status"])
+            self.assertEqual(2, final_rows["36"]["readyToPrintCount"])
+            self.assertEqual("error", final_rows["38"]["status"])
+            self.assertEqual("ready", final_rows["40"]["status"])
+            self.assertIn("/api/v1/labels/files/", final_payload["pdfUrl"])
+
+            with Session(context["engine"]) as session:
+                print_jobs = session.query(LabelPrintJobModel).order_by(LabelPrintJobModel.wb_size).all()
+                self.assertEqual([2, 1], [print_job.quantity for print_job in print_jobs])
+
 
 class _FakeProductCardService:
     def __init__(self, product_card) -> None:

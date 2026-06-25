@@ -99,6 +99,45 @@ def extract_gs1_mark_codes(text: str) -> list[str]:
     return codes
 
 
+def extract_teksher_csv_mark_codes(text: str, limit: int | None = None) -> list[str]:
+    codes: list[str] = []
+    seen: set[str] = set()
+    lines = [
+        normalize_mark_code(line.strip().strip('"'))
+        for line in (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        if line.strip()
+    ]
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if _looks_like_header(line) or not line.startswith("01"):
+            index += 1
+            continue
+
+        parts = [line]
+        next_index = index + 1
+        if next_index < len(lines) and lines[next_index].startswith("91"):
+            parts.append(GS + lines[next_index])
+            next_index += 1
+        if next_index < len(lines) and lines[next_index].startswith("92"):
+            parts.append(GS + lines[next_index])
+            next_index += 1
+
+        parsed = parse_mark_code("".join(parts))
+        if parsed.valid and parsed.raw not in seen:
+            seen.add(parsed.raw)
+            codes.append(parsed.raw)
+            if limit is not None and len(codes) >= limit:
+                return codes
+        index = max(next_index, index + 1)
+
+    if codes:
+        return codes
+
+    fallback = extract_gs1_mark_codes(text)
+    return fallback[:limit] if limit is not None else fallback
+
+
 def parse_mark_code(value: str) -> ParsedMarkCode:
     code = _normalize_ai_parentheses(normalize_mark_code(value))
     if not code:

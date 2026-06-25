@@ -370,6 +370,27 @@ def _product_card() -> ProductCardTemplate:
 
 
 class TeksherServiceTests(unittest.TestCase):
+    def test_parse_codes_reads_teksher_three_line_csv_blocks(self) -> None:
+        service = TeksherService(browser=FakeBrowser(), session=FakeSession(), sleep=lambda _: None)
+        code_1_line_01 = "010470905562066421SERIAL,ONE"
+        code_2_line_01 = "010470905562066421SERIAL;TWO"
+        csv_text = "\n".join(
+            [
+                code_1_line_01,
+                "91EE12",
+                "92" + ("A" * 44),
+                code_2_line_01,
+                "91FF34",
+                "92" + ("B" * 44),
+            ]
+        )
+
+        codes = service._parse_codes(csv_text.encode("utf-8"))
+
+        self.assertEqual(2, len(codes))
+        self.assertEqual(code_1_line_01 + GS + "91EE12" + GS + "92" + ("A" * 44), codes[0])
+        self.assertEqual(code_2_line_01 + GS + "91FF34" + GS + "92" + ("B" * 44), codes[1])
+
     def test_issue_marks_uses_api_and_assigns_codes(self) -> None:
         service = TeksherService(
             browser=FakeBrowser(),

@@ -54,7 +54,13 @@ from wb_marks_app.services.browser import BrowserSessionManager
 from wb_marks_app.services.gtin_excel import GtinExcelParser
 from wb_marks_app.services.gtin_request import build_gtin_request_workbook
 from wb_marks_app.services.label_pdf import LabelPdfError, render_labels_pdf
-from wb_marks_app.services.labels import build_manual_labels, extract_gs1_mark_codes, labels_to_dicts, make_label_record
+from wb_marks_app.services.labels import (
+    build_manual_labels,
+    extract_gs1_mark_codes,
+    extract_teksher_csv_mark_codes,
+    labels_to_dicts,
+    make_label_record,
+)
 from wb_marks_app.services.product_cards import ProductCardTemplateService
 from wb_marks_app.services.server_workflow import LaunchRequest, WorkflowRunService
 from wb_marks_app.services.teksher import ExistingTeksherProductError, TeksherService
@@ -850,6 +856,72 @@ def create_app() -> FastAPI:
                 "status": _serialize_product_card_order_run(run, session),
             }
 
+    @app.post("/api/product-cards/{wb_article}/mark-orders/{run_id}/retry-failed")
+    def retry_product_card_failed_mark_order_items(request: Request, wb_article: str, run_id: str):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        try:
+            with session_scope() as session:
+                run = _get_user_run(session, run_id, user_id)
+                _ensure_product_card_run(run, wb_article)
+            workflow_service.retry_failed_items(run_id)
+            with session_scope() as session:
+                run = _get_user_run(session, run_id, user_id)
+                return {"ok": True, "status": _serialize_product_card_order_run(run, session)}
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Run not found")
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+
+    @app.post("/api/product-cards/{wb_article}/mark-orders/{run_id}/items/{item_id}/retry")
+    def retry_product_card_mark_order_item(request: Request, wb_article: str, run_id: str, item_id: str):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        try:
+            with session_scope() as session:
+                run = _get_user_run(session, run_id, user_id)
+                _ensure_product_card_run(run, wb_article)
+            workflow_service.retry_items(run_id, {item_id})
+            with session_scope() as session:
+                run = _get_user_run(session, run_id, user_id)
+                return {"ok": True, "status": _serialize_product_card_order_run(run, session)}
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Run item not found")
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+
+    @app.post("/api/product-cards/{wb_article}/mark-orders/{run_id}/items/{item_id}/recover-manual")
+    async def recover_product_card_mark_order_item(request: Request, wb_article: str, run_id: str, item_id: str):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        try:
+            with session_scope() as session:
+                run = _get_user_run(session, run_id, user_id)
+                _ensure_product_card_run(run, wb_article)
+            workflow_service.recover_manual_item(
+                run_id=run_id,
+                item_id=item_id,
+                user_id=user_id,
+                marking_operation_id=str(payload.get("marking_operation_id") or ""),
+                transgran_operation_id=str(payload.get("transgran_operation_id") or ""),
+            )
+            with session_scope() as session:
+                run = _get_user_run(session, run_id, user_id)
+                return {"ok": True, "status": _serialize_product_card_order_run(run, session)}
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Run item not found")
+        except (ValueError, AppError, ManualStepRequired) as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+
     @app.post("/api/product-cards/{wb_article}/label-print")
     async def create_product_card_label_print(request: Request, wb_article: str):
         user_id = _user_id_from_session(request)
@@ -1345,6 +1417,20 @@ def _product_card_order_history(session: Session, user_id: str, wb_article: str)
 
 
 def _product_card_item_mark_codes(session: Session, item: WorkflowRunItemModel) -> list[str]:
+    artifact = session.execute(
+        select(ArtifactModel)
+        .where(ArtifactModel.run_item_id == item.id)
+        .where(ArtifactModel.kind == "csv")
+    ).scalars().first()
+    if artifact is not None and artifact.file_path:
+        try:
+            text = Path(artifact.file_path).read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            text = ""
+        codes = extract_teksher_csv_mark_codes(text)
+        if codes:
+            return codes
+
     mark_codes = session.execute(
         select(MarkCodeModel)
         .where(MarkCodeModel.run_item_id == item.id)
@@ -1354,18 +1440,7 @@ def _product_card_item_mark_codes(session: Session, item: WorkflowRunItemModel) 
     if codes:
         return codes
 
-    artifact = session.execute(
-        select(ArtifactModel)
-        .where(ArtifactModel.run_item_id == item.id)
-        .where(ArtifactModel.kind == "csv")
-    ).scalars().first()
-    if artifact is None or not artifact.file_path:
-        return []
-    try:
-        text = Path(artifact.file_path).read_text(encoding="utf-8-sig", errors="replace")
-    except OSError:
-        return []
-    return extract_gs1_mark_codes(text)
+    return []
 
 
 def _product_card_ready_to_print_counts(session: Session, user_id: str, wb_article: str) -> dict[str, int]:
@@ -1393,9 +1468,7 @@ def _product_card_ready_to_print_counts(session: Session, user_id: str, wb_artic
         if marking is None or str(marking.status or "").upper() != "ACCEPTED":
             counts[size_key] = 0
             continue
-        mark_count = len(_product_card_item_mark_codes(session, item))
-        printed_count = _product_card_printed_quantity_for_item(session, user_id, wb_article, item)
-        counts[size_key] = max(mark_count - printed_count, 0)
+        counts[size_key] = _product_card_ready_to_print_count_for_item(session, user_id, wb_article, item)
     return counts
 
 
@@ -1688,7 +1761,7 @@ def _product_card_label_print_sources(session: Session, user_id: str, product_ca
         row = rows_by_size.get(size_key)
         if row is None:
             continue
-        codes = _product_card_item_mark_codes(session, item)
+        codes = _product_card_item_mark_codes(session, item)[: max(int(item.quantity or 0), 0)]
         if not codes:
             continue
         printed_count = _product_card_printed_quantity_for_item(session, user_id, product_card.wb_article, item)
@@ -1721,6 +1794,17 @@ def _product_card_printed_quantity_for_item(
         query = query.where(LabelPrintJobModel.created_at >= item.created_at)
     print_jobs = session.execute(query).scalars().all()
     return sum(max(int(print_job.quantity or 0), 0) for print_job in print_jobs)
+
+
+def _product_card_ready_to_print_count_for_item(
+    session: Session,
+    user_id: str,
+    wb_article: str,
+    item: WorkflowRunItemModel,
+) -> int:
+    mark_count = min(len(_product_card_item_mark_codes(session, item)), max(int(item.quantity or 0), 0))
+    printed_count = _product_card_printed_quantity_for_item(session, user_id, wb_article, item)
+    return max(mark_count - printed_count, 0)
 
 
 def _product_card_label_print_history(request: Request, session: Session, user_id: str, wb_article: str) -> list[dict]:
@@ -1833,11 +1917,21 @@ def _serialize_product_card_order_item(item: WorkflowRunItemModel, session: Sess
         select(TeksherOperationModel).where(TeksherOperationModel.run_item_id == item.id)
     ).scalars().all()
     operations_by_kind = {operation.operation_kind: operation for operation in operations}
+    run = session.get(WorkflowRunModel, item.run_id)
+    ready_to_print_count = 0
+    if run is not None and run.user_id and run.source_url.startswith("/product-cards/"):
+        ready_to_print_count = _product_card_ready_to_print_count_for_item(
+            session,
+            run.user_id,
+            run.source_url.rsplit("/", 1)[-1],
+            item,
+        )
     return {
         "id": item.id,
         "size": item.size,
         "gtin": item.gtin,
         "quantity": item.quantity,
+        "ready_to_print_count": ready_to_print_count,
         "document_number": item.document_number,
         "status": item.status,
         "status_text": _product_card_order_status_text(item, operations_by_kind),
@@ -2042,7 +2136,7 @@ def _label_api_missing_item_sizes(workflow_rows: list[dict], items: list[dict]) 
 
 
 def _refresh_label_api_job(request: Request, session: Session, job: LabelApiJobModel) -> None:
-    if job.status in {"done", "error"}:
+    if job.status == "done":
         return
     if not job.run_id:
         job.status = "error"
@@ -2065,61 +2159,59 @@ def _refresh_label_api_job(request: Request, session: Session, job: LabelApiJobM
 
     items_by_size = {_product_card_size_key(item.size): item for item in run.items}
     has_failed = False
-    all_completed = bool(job.rows)
+    has_active = False
+    has_completed = False
     for row in job.rows:
         item = items_by_size.get(_product_card_size_key(row.size))
         if item is None:
             row.status = "emission"
-            all_completed = False
+            row.error_message = ""
+            has_active = True
             continue
         row.workflow_run_item_id = item.id
         if item.status == "failed":
             row.status = "error"
             row.error_message = item.error or "Не удалось создать этикетки"
             has_failed = True
-            all_completed = False
             continue
         if item.status == "completed":
             row.status = "ready" if job.pdf_file_id else "transgran"
             row.error_message = ""
+            has_completed = True
             continue
         row.status = _label_api_row_status(item.status)
         row.error_message = ""
-        all_completed = False
+        has_active = True
 
-    if has_failed or run.status == "partial_failed":
-        job.status = "error"
-        job.error = job.error or "Одна или несколько строк завершились ошибкой."
-        for row in job.rows:
-            if row.status != "ready":
-                row.status = "error" if row.status != "ready" else row.status
-                row.error_message = row.error_message or job.error
-        session.flush()
-        return
-
-    if all_completed and not job.pdf_file_id:
+    if has_completed and not has_active and not job.pdf_file_id:
         try:
             _create_label_api_job_pdf(request, session, job)
         except Exception as exc:
             job.status = "error"
             job.error = str(exc)
             for row in job.rows:
-                row.status = "error"
-                row.error_message = job.error
+                if row.status != "error":
+                    row.status = "error"
+                    row.error_message = job.error
             session.flush()
             return
 
     if job.pdf_file_id:
-        job.status = "done"
-        job.error = ""
+        job.status = "partial_failed" if has_failed else "done"
+        job.error = "Одна или несколько строк завершились ошибкой." if has_failed else ""
         pdf_url = _label_api_file_url(request, job.pdf_file_id)
         job.pdf_url = pdf_url
         for row in job.rows:
-            row.status = "ready"
-            row.pdf_url = pdf_url
-            row.error_message = ""
+            if row.status != "error":
+                row.status = "ready"
+                row.pdf_url = pdf_url
+                row.error_message = ""
+    elif has_failed and not has_active:
+        job.status = "error"
+        job.error = "Одна или несколько строк завершились ошибкой."
     else:
-        job.status = "processing" if run.status == "running" else "queued"
+        job.status = "processing" if has_active or run.status == "running" else "queued"
+        job.error = ""
     session.flush()
 
 
@@ -2159,7 +2251,10 @@ def _create_label_api_job_pdf(request: Request, session: Session, job: LabelApiJ
         product_row = product_rows_by_size.get(size_key)
         if job_row is None or product_row is None:
             continue
-        codes = _product_card_item_mark_codes(session, item)
+        if item.status != "completed":
+            continue
+        expected_quantity = max(int(job_row.quantity or item.quantity or 0), 0)
+        codes = _product_card_item_mark_codes(session, item)[:expected_quantity]
         if not codes:
             raise ValueError(f"Нет кодов маркировки для размера {item.size}.")
         sources.append({"item": item, "row": product_row, "job_row": job_row, "mark_codes": codes})
@@ -2243,10 +2338,12 @@ def _serialize_label_api_job(request: Request, job: LabelApiJobModel) -> dict:
 
 
 def _serialize_label_api_job_row(row: LabelApiJobRowModel) -> dict:
+    ready_count = row.quantity if row.status == "ready" else 0
     payload = {
         "size": row.size,
         "quantity": row.quantity,
         "status": row.status,
+        "readyToPrintCount": ready_count,
     }
     if row.pdf_url:
         payload["pdfUrl"] = row.pdf_url
@@ -2511,6 +2608,11 @@ def _get_user_run(session: Session, run_id: str, user_id: str) -> WorkflowRunMod
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return run
+
+
+def _ensure_product_card_run(run: WorkflowRunModel, wb_article: str) -> None:
+    if run.source_url != f"/product-cards/{wb_article}":
+        raise HTTPException(status_code=404, detail="Run not found")
 
 
 def _build_run_labels(

@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover - optional dependency during lightweight
 from wb_marks_app.exceptions import AppError, ManualStepRequired
 from wb_marks_app.models import AppConfig, MarkingTask
 from wb_marks_app.services.browser import BrowserSessionManager
-from wb_marks_app.services.labels import extract_gs1_mark_codes
+from wb_marks_app.services.labels import extract_teksher_csv_mark_codes
 
 
 Logger = Callable[[str], None]
@@ -1700,7 +1700,7 @@ class TeksherService:
 
     def _parse_codes(self, csv_bytes: bytes) -> list[str]:
         text = csv_bytes.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
-        return extract_gs1_mark_codes(text)
+        return extract_teksher_csv_mark_codes(text)
 
     def _raise_for_status(self, response: requests.Response) -> None:
         try:
