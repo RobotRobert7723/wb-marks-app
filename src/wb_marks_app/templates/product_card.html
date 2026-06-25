@@ -1098,6 +1098,8 @@
     if (!markingId || !markingId.trim()) return;
     const transgranId = window.prompt('ID операции трансграна Текшер', '');
     if (!transgranId || !transgranId.trim()) return;
+    const markPrinted = window.confirm('Этикетки уже напечатаны вручную? Если да, PDF будет добавлен в историю печати, а готовность к печати обнулится.');
+    const template = labelTemplateSelect ? labelTemplateSelect.value : 'srad';
     if (button) button.disabled = true;
     setOrderHistoryMessage('Восстанавливаем строку заказа...', '');
     try {
@@ -1107,6 +1109,8 @@
         body: JSON.stringify({
           marking_operation_id: markingId.trim(),
           transgran_operation_id: transgranId.trim(),
+          mark_printed: markPrinted,
+          template,
         }),
       });
       const payload = await response.json().catch(() => ({}));
@@ -1116,6 +1120,13 @@
       }
       applyMarkOrderStatus(payload.status || {});
       await loadOrderHistory(true);
+      if (markPrinted) {
+        clearReadyPrintCounts();
+        if (printHistoryPanel && !printHistoryPanel.hidden) {
+          renderPrintHistory(payload.print_history || []);
+          setPrintHistoryMessage('', '');
+        }
+      }
       setOrderHistoryMessage('Строка заказа восстановлена.', 'success');
     } catch (error) {
       setOrderHistoryMessage('Не удалось восстановить строку заказа.', 'error');

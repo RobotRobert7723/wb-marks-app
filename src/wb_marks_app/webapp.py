@@ -916,7 +916,32 @@ def create_app() -> FastAPI:
             )
             with session_scope() as session:
                 run = _get_user_run(session, run_id, user_id)
-                return {"ok": True, "status": _serialize_product_card_order_run(run, session)}
+                response = {"ok": True, "status": _serialize_product_card_order_run(run, session)}
+                if bool(payload.get("mark_printed")):
+                    settings = get_or_create_settings(session, user_id)
+                    config = settings_to_app_config(settings)
+                    product_card = product_card_service.build_template(wb_article, config)
+                    version, mapping_rows = teksher_mapping_service.latest_payload(
+                        session,
+                        user_id,
+                        product_card.wb_article,
+                    )
+                    product_card = teksher_mapping_service.apply_payload(product_card, mapping_rows, version)
+                    print_result = _create_product_card_label_pdf(
+                        request,
+                        session,
+                        user_id,
+                        product_card,
+                        _product_card_label_template(str(payload.get("template") or "srad")),
+                    )
+                    response["print"] = print_result
+                    response["print_history"] = _product_card_label_print_history(
+                        request,
+                        session,
+                        user_id,
+                        product_card.wb_article,
+                    )
+                return response
         except KeyError:
             raise HTTPException(status_code=404, detail="Run item not found")
         except (ValueError, AppError, ManualStepRequired) as exc:
