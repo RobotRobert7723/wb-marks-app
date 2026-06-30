@@ -5,6 +5,8 @@ from dataclasses import asdict, dataclass
 
 
 GS = "\x1d"
+CHESTNY_ZNAK_LIGHT_INDUSTRY_SERIAL_LENGTH = 13
+CHESTNY_ZNAK_LIGHT_INDUSTRY_CRYPTO_TAIL_LENGTH = 44
 
 
 @dataclass(slots=True)
@@ -103,7 +105,7 @@ def extract_teksher_csv_mark_codes(text: str, limit: int | None = None) -> list[
     codes: list[str] = []
     seen: set[str] = set()
     lines = [
-        normalize_mark_code(line.strip().strip('"'))
+        normalize_mark_code(_decode_csv_escaped_field(line))
         for line in (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
         if line.strip()
     ]
@@ -245,6 +247,31 @@ def validate_mark_code_for_datamatrix(value: str, *, require_verification: bool 
     return parsed
 
 
+def validate_mark_code_for_chestny_znak_light_industry(value: str) -> ParsedMarkCode:
+    parsed = parse_mark_code(value)
+    if not parsed.valid:
+        raise ValueError(parsed.error or "invalid GS1 DataMatrix payload")
+    if len(parsed.serial) != CHESTNY_ZNAK_LIGHT_INDUSTRY_SERIAL_LENGTH:
+        raise ValueError(
+            "AI 21 serial must contain "
+            f"{CHESTNY_ZNAK_LIGHT_INDUSTRY_SERIAL_LENGTH} characters for Chestny Znak light industry; "
+            f"got {len(parsed.serial)}"
+        )
+    if not parsed.check_key or not parsed.crypto_tail:
+        raise ValueError("Chestny Znak light industry code must include AI 91 and AI 92 verification fields")
+    if len(parsed.check_key) != 4:
+        raise ValueError(f"AI 91 check key must contain 4 characters; got {len(parsed.check_key)}")
+    if len(parsed.crypto_tail) != CHESTNY_ZNAK_LIGHT_INDUSTRY_CRYPTO_TAIL_LENGTH:
+        raise ValueError(
+            "AI 92 crypto tail must contain "
+            f"{CHESTNY_ZNAK_LIGHT_INDUSTRY_CRYPTO_TAIL_LENGTH} characters for Chestny Znak light industry; "
+            f"got {len(parsed.crypto_tail)}"
+        )
+    if parsed.short_check_code:
+        raise ValueError("Chestny Znak light industry code must use AI 91/92, not AI 93")
+    return parsed
+
+
 def validate_wb_barcode_for_code128(value: str) -> str:
     barcode = str(value or "").strip()
     if not barcode:
@@ -374,6 +401,17 @@ def _first_csv_field(line: str) -> str:
         row = next(csv.reader([line]))
     except csv.Error:
         return line.strip('"')
+    return str(row[0]) if row else ""
+
+
+def _decode_csv_escaped_field(line: str) -> str:
+    value = str(line or "").strip()
+    if not value.startswith('"'):
+        return value
+    try:
+        row = next(csv.reader([value]))
+    except csv.Error:
+        return value.strip('"')
     return str(row[0]) if row else ""
 
 

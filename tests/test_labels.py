@@ -5,7 +5,9 @@ from wb_marks_app.services.labels import (
     build_manual_labels,
     extract_gs1_mark_codes,
     extract_mark_codes,
+    extract_teksher_csv_mark_codes,
     parse_mark_code,
+    validate_mark_code_for_chestny_znak_light_industry,
     validate_mark_code_for_datamatrix,
     validate_wb_barcode_for_code128,
 )
@@ -45,6 +47,17 @@ class LabelServiceTests(unittest.TestCase):
 
         self.assertEqual([code], codes)
 
+    def test_extract_teksher_csv_mark_codes_decodes_csv_escaped_quote(self) -> None:
+        text = '"0104709055620688215hO*7?*I3E""C*\\u001d91EE12\\u001d92AehsMP1ZyziS/MQd+w3uRiJuU7Bgqzca2AKgPL+wpCI="'
+
+        codes = extract_teksher_csv_mark_codes(text)
+        parsed = parse_mark_code(codes[0])
+
+        self.assertEqual(1, len(codes))
+        self.assertTrue(parsed.valid)
+        self.assertEqual('5hO*7?*I3E"C*', parsed.serial)
+        self.assertEqual(13, len(parsed.serial))
+
     def test_build_manual_labels_uses_one_label_per_mark_code(self) -> None:
         text = "0104700092263449215/ExwqH/2ziur\\x1d91EE12\\x1d923rhVzA0Rg7nIB\n"
 
@@ -78,6 +91,12 @@ class LabelServiceTests(unittest.TestCase):
     def test_validate_mark_code_for_datamatrix_requires_verification_fields(self) -> None:
         with self.assertRaisesRegex(ValueError, "AI 91/92 or AI 93"):
             validate_mark_code_for_datamatrix("0104700092263449215l(fu2P(Il>rT")
+
+    def test_validate_mark_code_for_chestny_znak_light_industry_rejects_wrong_serial_length(self) -> None:
+        code = "0104709055620688215hO*7?*I3E\"\"C*" + GS + "91EE12" + GS + "92" + ("A" * 44)
+
+        with self.assertRaisesRegex(ValueError, "AI 21 serial must contain 13 characters"):
+            validate_mark_code_for_chestny_znak_light_industry(code)
 
     def test_validate_wb_barcode_for_code128_rejects_control_characters(self) -> None:
         with self.assertRaisesRegex(ValueError, "printable ASCII"):

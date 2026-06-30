@@ -93,7 +93,7 @@ class LabelRouteTests(unittest.TestCase):
                     },
                 )
                 self.assertEqual(400, bad_pdf.status_code)
-                self.assertIn("AI 91/92", bad_pdf.text)
+                self.assertIn("AI 91 and AI 92", bad_pdf.text)
 
                 api_pdf = client.post(
                     "/api/labels/pdf",

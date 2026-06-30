@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -18,7 +19,8 @@ from reportlab.pdfgen.canvas import Canvas
 from wb_marks_app.services.labels import (
     GS,
     LabelRecord,
-    validate_mark_code_for_datamatrix,
+    parse_mark_code,
+    validate_mark_code_for_chestny_znak_light_industry,
     validate_wb_barcode_for_code128,
 )
 
@@ -36,6 +38,7 @@ _ASSET_DIR = Path(__file__).resolve().parents[1] / "static" / "label_assets"
 _CARE_ICONS_ASSET = _ASSET_DIR / "care_icons_58x40.png"
 _EAC_ASSET = _ASSET_DIR / "eac_58x40.png"
 _HONEST_SIGN_ASSET = _ASSET_DIR / "honest_sign_58x40.png"
+_LOGGER = logging.getLogger(__name__)
 
 PDF_TEMPLATE_ALIASES = {
     "srad": "58x40_full",
@@ -76,6 +79,7 @@ def render_labels_pdf(labels: list[LabelRecord], *, template: str = "srad") -> b
         raise LabelPdfError("No labels to render")
 
     _register_fonts()
+    _validate_chestny_znak_labels(labels, pdf_template)
     try:
         barcode_requests = _collect_barcode_requests(labels, pdf_template)
     except ValueError as exc:
@@ -122,7 +126,7 @@ def _collect_barcode_requests(labels: list[LabelRecord], template: str) -> list[
                 },
             )
         if template in templates_with_chz and label.mark_code:
-            parsed = validate_mark_code_for_datamatrix(label.mark_code)
+            parsed = validate_mark_code_for_chestny_znak_light_industry(label.mark_code)
             key = _barcode_key("datamatrix", parsed.raw)
             requests[key] = _BarcodeRequest(
                 key=key,
@@ -135,6 +139,36 @@ def _collect_barcode_requests(labels: list[LabelRecord], template: str) -> list[
                 },
             )
     return list(requests.values())
+
+
+def _validate_chestny_znak_labels(labels: list[LabelRecord], template: str) -> None:
+    templates_with_chz = {"58x40_full", "58x40_medium", "58x40_simple", "58x40_chz"}
+    if template not in templates_with_chz:
+        return
+
+    errors: list[str] = []
+    for label in labels:
+        if not label.mark_code:
+            continue
+        try:
+            validate_mark_code_for_chestny_znak_light_industry(label.mark_code)
+        except ValueError as exc:
+            parsed = parse_mark_code(label.mark_code)
+            errors.append(
+                "label "
+                f"{label.index}/{label.total}, "
+                f"size={label.size or '-'}, "
+                f"gtin={parsed.gtin or label.gtin or '-'}, "
+                f"serial={parsed.serial or '-'}: {exc}"
+            )
+
+    if not errors:
+        return
+    message = "Chestny Znak code validation failed before label printing: " + "; ".join(errors[:20])
+    if len(errors) > 20:
+        message += f"; and {len(errors) - 20} more"
+    _LOGGER.error(message)
+    raise LabelPdfError(message)
 
 
 def _page_templates_for(template: str) -> tuple[str, ...]:
@@ -333,7 +367,7 @@ def _raw(raw_barcodes: dict[str, dict[str, Any]], kind: str, value: str) -> dict
 
 
 def _raw_datamatrix(raw_barcodes: dict[str, dict[str, Any]], value: str) -> dict[str, Any]:
-    return _raw(raw_barcodes, "datamatrix", validate_mark_code_for_datamatrix(value).raw)
+    return _raw(raw_barcodes, "datamatrix", validate_mark_code_for_chestny_znak_light_industry(value).raw)
 
 
 def _draw_datamatrix(canvas: Canvas, raw: dict[str, Any], x_mm: float, y_top_mm: float, size_mm: float) -> None:

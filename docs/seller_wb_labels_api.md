@@ -2,6 +2,8 @@
 
 Production base URL: `https://marksapp.sesrv.ru/api/v1`.
 
+Current contract version: `v1.1`.
+
 Спецификация API web-сервиса для печати этикеток из интерфейса `seller.wildberries.ru/new-goods/all-goods`.
 
 Расширение Chrome встраивает кнопку печати в строку товара WB, получает из страницы:
@@ -202,6 +204,13 @@ Authorization: Bearer <plugin-token>
 
 Рекомендуемый интервал опроса: 2-5 секунд.
 
+Правила polling для UI:
+
+- UI не должен останавливать опрос при первой строке со статусом `error`, если в задании есть другие строки со статусом `emission`, `applying` или `transgran`.
+- UI обрабатывает статус каждой строки независимо от остальных строк.
+- Опрос можно остановить только когда все строки находятся в терминальных статусах `ready` или `error`, а статус задания равен `done`, `partial_failed` или `error`.
+- Поле `readyToPrintCount` показывает количество этикеток, готовых к печати по строке. Для строки `ready` оно должно быть равно заказанному `quantity`; после формирования PDF это количество считается распечатанным в WB Marks App.
+
 #### Response: processing
 
 HTTP `200`
@@ -211,8 +220,8 @@ HTTP `200`
   "jobId": "job_123",
   "status": "processing",
   "rows": [
-    { "size": "36", "quantity": 2, "status": "applying" },
-    { "size": "38", "quantity": 1, "status": "transgran" }
+    { "size": "36", "quantity": 2, "status": "applying", "readyToPrintCount": 0 },
+    { "size": "38", "quantity": 1, "status": "transgran", "readyToPrintCount": 0 }
   ]
 }
 ```
@@ -231,12 +240,14 @@ HTTP `200`
       "size": "36",
       "quantity": 2,
       "status": "ready",
+      "readyToPrintCount": 2,
       "pdfUrl": "https://service.example.com/api/v1/labels/files/file_123.pdf"
     },
     {
       "size": "38",
       "quantity": 1,
       "status": "ready",
+      "readyToPrintCount": 1,
       "pdfUrl": "https://service.example.com/api/v1/labels/files/file_123.pdf"
     }
   ]
@@ -252,27 +263,79 @@ HTTP `200`
 ```json
 {
   "jobId": "job_123",
-  "status": "error",
+  "status": "partial_failed",
+  "pdfUrl": "https://service.example.com/api/v1/labels/files/file_123.pdf",
   "rows": [
     {
       "size": "36",
       "quantity": 2,
       "status": "error",
+      "readyToPrintCount": 0,
       "errorMessage": "Не удалось выпустить коды маркировки"
     },
     {
       "size": "38",
       "quantity": 1,
       "status": "ready",
+      "readyToPrintCount": 1,
       "pdfUrl": "https://service.example.com/api/v1/labels/files/file_123.pdf"
     }
   ]
 }
 ```
 
-Для первой версии рекомендуется строгая политика: если хотя бы одна строка завершилась ошибкой, итоговый `status` задания равен `error`.
+`partial_failed` означает, что часть строк завершилась успешно и PDF готов для успешных строк, но одна или несколько строк завершились ошибкой. UI должен показать PDF для строк `ready` и оставить возможность повторной попытки для строк `error`.
 
-### 4. Скачивание PDF
+### 4. Повторная попытка по ошибочным строкам
+
+```http
+POST /api/v1/labels/print-jobs/{jobId}/retry
+Content-Type: application/json
+Authorization: Bearer <plugin-token>
+```
+
+Endpoint нужен UI плагина для восстановления строк, завершившихся ошибкой.
+
+#### Request
+
+```json
+{
+  "sizes": ["42"]
+}
+```
+
+#### Request fields
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `sizes` | array | yes | Список размеров, по которым нужно повторить процесс. Повторять можно только строки задания со статусом `error`. |
+
+#### Response
+
+HTTP `200`
+
+Формат ответа такой же, как у `GET /api/v1/labels/print-jobs/{jobId}`.
+
+```json
+{
+  "jobId": "job_123",
+  "status": "processing",
+  "rows": [
+    { "size": "36", "quantity": 2, "status": "ready", "readyToPrintCount": 2, "pdfUrl": "https://service.example.com/api/v1/labels/files/file_123.pdf" },
+    { "size": "42", "quantity": 1, "status": "applying", "readyToPrintCount": 0 }
+  ]
+}
+```
+
+Правила retry:
+
+- Повторная попытка запускается только для строк `error`, указанных в `sizes`.
+- Если эмиссия уже была создана, повторная попытка не должна создавать новый заказ на эмиссию для той же строки.
+- Процесс должен продолжаться с последней незавершенной операции строки: эмиссия, нанесение, трансгран или PDF.
+- После успешной повторной попытки строка становится `ready`; если все строки успешны, задание становится `done`, иначе `partial_failed`.
+- Если строку восстановили вручную в WB Marks App, UI плагина узнает это через следующий `GET /print-jobs/{jobId}`.
+
+### 5. Скачивание PDF
 
 ```http
 GET /api/v1/labels/files/{fileId}.pdf
@@ -294,7 +357,8 @@ Authorization: Bearer <plugin-token>
 | `queued` | Задание создано и ожидает выполнения. |
 | `processing` | Задание выполняется. |
 | `done` | Все строки успешно завершены, PDF готов. |
-| `error` | Задание завершилось ошибкой. |
+| `partial_failed` | Все активные операции завершены, PDF готов для успешных строк, но одна или несколько строк завершились ошибкой. |
+| `error` | Задание завершилось ошибкой, PDF не сформирован. |
 
 ## Статусы строк
 
@@ -373,6 +437,7 @@ Web-сервис получает только бизнес-данные: `wbSto
 1. `POST /api/v1/labels/readiness`
 2. `POST /api/v1/labels/print-jobs`
 3. `GET /api/v1/labels/print-jobs/{jobId}`
-4. `GET /api/v1/labels/files/{fileId}.pdf`
+4. `POST /api/v1/labels/print-jobs/{jobId}/retry`
+5. `GET /api/v1/labels/files/{fileId}.pdf`
 
 Обязательное поле магазина во всех request body: `wbStoreId`.

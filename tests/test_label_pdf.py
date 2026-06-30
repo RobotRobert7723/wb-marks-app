@@ -103,8 +103,25 @@ class LabelPdfTests(unittest.TestCase):
             mark_code="0104709055620664215YudSpca<mc9X",
         )
 
-        with self.assertRaisesRegex(LabelPdfError, "AI 91/92 or AI 93"):
+        with self.assertRaisesRegex(LabelPdfError, "must include AI 91 and AI 92"):
             render_labels_pdf([label], template="srad")
+
+    def test_render_labels_pdf_logs_chestny_znak_validation_errors(self) -> None:
+        invalid_code = "0104709055620688215hO*7?*I3E\"\"C*" + GS + "91EE12" + GS + "92" + ("A" * 44)
+        label = make_label_record(
+            template="srad",
+            item_name="Sport suit",
+            size="42",
+            wb_barcode="2049271462665",
+            mark_code=invalid_code,
+        )
+
+        with self.assertLogs("wb_marks_app.services.label_pdf", level="ERROR") as logs:
+            with self.assertRaisesRegex(LabelPdfError, "AI 21 serial must contain 13 characters"):
+                render_labels_pdf([label], template="srad")
+
+        self.assertIn("size=42", "\n".join(logs.output))
+        self.assertIn("serial=5hO*7?*I3E\"\"C*", "\n".join(logs.output))
 
 
 if __name__ == "__main__":
