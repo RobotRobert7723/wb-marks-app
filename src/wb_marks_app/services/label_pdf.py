@@ -47,6 +47,11 @@ PDF_TEMPLATE_ALIASES = {
     "wb_chz_58x40": "58x40_full",
     "simple": "58x40_simple",
     "58x40_simple": "58x40_simple",
+    "simple_brand": "58x40_simple_brand",
+    "simplebrand": "58x40_simple_brand",
+    "simple brand": "58x40_simple_brand",
+    "simple-brand": "58x40_simple_brand",
+    "58x40_simple_brand": "58x40_simple_brand",
     "medium": "58x40_medium",
     "58x40_medium": "58x40_medium",
     "wb": "58x40_wb",
@@ -107,8 +112,8 @@ def normalize_pdf_template(value: str) -> str:
 
 def _collect_barcode_requests(labels: list[LabelRecord], template: str) -> list[_BarcodeRequest]:
     requests: dict[str, _BarcodeRequest] = {}
-    templates_with_wb = {"58x40_full", "58x40_medium", "58x40_simple", "58x40_wb"}
-    templates_with_chz = {"58x40_full", "58x40_medium", "58x40_simple", "58x40_chz"}
+    templates_with_wb = {"58x40_full", "58x40_medium", "58x40_simple", "58x40_simple_brand", "58x40_wb"}
+    templates_with_chz = {"58x40_full", "58x40_medium", "58x40_simple", "58x40_simple_brand", "58x40_chz"}
     for label in labels:
         if template in templates_with_wb and label.wb_barcode:
             value = validate_wb_barcode_for_code128(label.wb_barcode)
@@ -142,7 +147,7 @@ def _collect_barcode_requests(labels: list[LabelRecord], template: str) -> list[
 
 
 def _validate_chestny_znak_labels(labels: list[LabelRecord], template: str) -> None:
-    templates_with_chz = {"58x40_full", "58x40_medium", "58x40_simple", "58x40_chz"}
+    templates_with_chz = {"58x40_full", "58x40_medium", "58x40_simple", "58x40_simple_brand", "58x40_chz"}
     if template not in templates_with_chz:
         return
 
@@ -178,6 +183,13 @@ def _page_templates_for(template: str) -> tuple[str, ...]:
         return ("58x40_full", "58x40_chz", "58x40_wb")
     if template == "58x40_simple":
         return ("58x40_chz", "58x40_wb")
+    if template == "58x40_simple_brand":
+        return (
+            "58x40_simple_brand_wb",
+            "58x40_simple_brand_chz",
+            "58x40_simple_brand_combo",
+            "58x40_simple_brand_note",
+        )
     return (template,)
 
 
@@ -249,6 +261,14 @@ def _draw_label(
         _draw_chz_label(canvas, label, raw_barcodes, set_number)
     elif template == "58x40_note":
         _draw_note_label(canvas, label, set_number)
+    elif template == "58x40_simple_brand_wb":
+        _draw_simple_brand_wb_label(canvas, label, raw_barcodes, set_number)
+    elif template == "58x40_simple_brand_chz":
+        _draw_chz_label(canvas, label, raw_barcodes, set_number)
+    elif template == "58x40_simple_brand_combo":
+        _draw_simple_brand_combo_label(canvas, label, raw_barcodes, set_number)
+    elif template == "58x40_simple_brand_note":
+        _draw_simple_brand_note_label(canvas, label)
     else:
         _draw_full_label(canvas, label, raw_barcodes, set_number)
 
@@ -343,6 +363,88 @@ def _draw_chz_label(
     _draw_eac_logo(canvas, 42.0, 24.1, 5.0)
     if label.mark_preview:
         _draw_text_fit(canvas, label.mark_preview, 4.0, 34.4, 51.0, 6.2, font=_FONT_REGULAR, min_size=4.0)
+
+
+def _draw_simple_brand_wb_label(
+    canvas: Canvas,
+    label: LabelRecord,
+    raw_barcodes: dict[str, dict[str, Any]],
+    set_number: int,
+) -> None:
+    _draw_set_number(canvas, set_number, size_pt=11.0)
+    _draw_centered(canvas, label.item_name, 29.0, 4.4, 8.8, font=_FONT_BOLD, max_width_mm=34.0, min_size=6.0)
+    if label.vendor_code:
+        _draw_centered(canvas, "Артикул:", 29.0, 8.8, 8.2, font=_FONT_BOLD, max_width_mm=28.0, min_size=6.0)
+        _draw_centered(canvas, label.vendor_code, 29.0, 11.4, 7.6, font=_FONT_REGULAR, max_width_mm=37.0, min_size=5.0)
+    if label.composition:
+        _draw_centered(canvas, "Состав:", 29.0, 14.0, 7.8, font=_FONT_BOLD, max_width_mm=25.0, min_size=5.5)
+        _draw_centered(canvas, label.composition, 29.0, 16.2, 7.4, font=_FONT_REGULAR, max_width_mm=34.0, min_size=4.8)
+    if label.size:
+        _draw_pair_line(canvas, "Размер: ", label.size, 8.2, 19.5, 17.0, 7.8)
+    if label.color:
+        _draw_pair_line(canvas, "Цвет: ", label.color, 35.0, 19.5, 20.0, 7.8)
+    if label.wb_barcode:
+        _draw_code128(canvas, _raw(raw_barcodes, "code128", label.wb_barcode), 3.0, 23.2, 52.0, 8.9)
+        _draw_centered(canvas, label.wb_barcode, 29.0, 32.3, 8.8, max_width_mm=40.0, min_size=6.2)
+
+
+def _draw_simple_brand_combo_label(
+    canvas: Canvas,
+    label: LabelRecord,
+    raw_barcodes: dict[str, dict[str, Any]],
+    set_number: int,
+) -> None:
+    _draw_set_number(canvas, set_number, size_pt=11.0)
+    _draw_centered(canvas, label.item_name, 29.0, 2.0, 8.8, font=_FONT_REGULAR, max_width_mm=37.0, min_size=6.0)
+    if label.wb_barcode:
+        _draw_code128(canvas, _raw(raw_barcodes, "code128", label.wb_barcode), 3.0, 7.0, 52.0, 8.8)
+        _draw_centered(canvas, label.wb_barcode, 29.0, 16.2, 8.4, max_width_mm=40.0, min_size=6.0)
+
+    y = 21.0
+    rows = [
+        ("Размер", label.size),
+        ("Цвет", label.color),
+        ("Артикул", label.vendor_code),
+        ("Состав", label.composition),
+    ]
+    for title, value in rows:
+        if not value:
+            continue
+        used_lines = _draw_pair_wrapped(
+            canvas,
+            title,
+            value,
+            3.0,
+            y,
+            34.0,
+            7.1,
+            max_lines=2 if title == "Состав" else 1,
+            line_height_mm=2.6,
+        )
+        y += max(used_lines, 1) * 2.8
+        if y > 34.0:
+            break
+
+    if label.mark_code:
+        _draw_cz_logo(canvas, 39.9, 21.2)
+        _draw_datamatrix(canvas, _raw_datamatrix(raw_barcodes, label.mark_code), 40.0, 22.8, 13.2)
+    if label.mark_preview:
+        _draw_text_fit(canvas, label.mark_preview, 20.8, 36.4, 34.0, 5.1, font=_FONT_REGULAR, min_size=3.8)
+
+
+def _draw_simple_brand_note_label(canvas: Canvas, label: LabelRecord) -> None:
+    note_lines = [line.strip() for line in (label.note_text or "Худи 1шт.\nБрюки 1шт.").splitlines() if line.strip()]
+    lines = ["Менеджеру ПВЗ проверить"]
+    if note_lines:
+        lines.append(f"комплектность: {note_lines[0]}")
+        lines.extend(note_lines[1:])
+    else:
+        lines.append("комплектность.")
+    total_height = len(lines) * 4.8
+    y = min(max(SAFE_MARGIN_MM, (PAGE_HEIGHT_MM - total_height) / 2), 37.0 - total_height)
+    for line in lines:
+        _draw_centered(canvas, line, 29.0, y, 11.2, font=_FONT_REGULAR, max_width_mm=50.0, min_size=7.0)
+        y += 4.8
 
 
 def _draw_note_label(canvas: Canvas, label: LabelRecord, set_number: int) -> None:

@@ -1870,6 +1870,11 @@ def _product_card_label_template(value: str) -> str:
         "58x40_full": "srad",
         "simple": "simple",
         "58x40_simple": "simple",
+        "simple_brand": "simple_brand",
+        "simple brand": "simple_brand",
+        "simple-brand": "simple_brand",
+        "simplebrand": "simple_brand",
+        "58x40_simple_brand": "simple_brand",
         "medium": "medium",
         "58x40_medium": "medium",
     }
@@ -1879,7 +1884,7 @@ def _product_card_label_template(value: str) -> str:
 
 
 def _product_card_label_template_label(value: str) -> str:
-    labels = {"srad": "SRad", "simple": "Simple", "medium": "Medium"}
+    labels = {"srad": "SRad", "simple": "Simple", "simple_brand": "SIMPLE Brand", "medium": "Medium"}
     return labels.get(_product_card_label_template(value), "SRad")
 
 
@@ -2515,6 +2520,11 @@ def _template_requires_mark_codes(template: str) -> bool:
         "wb_chz_58x40",
         "simple",
         "58x40_simple",
+        "simple_brand",
+        "simple brand",
+        "simple-brand",
+        "simplebrand",
+        "58x40_simple_brand",
         "medium",
         "58x40_medium",
         "chz",

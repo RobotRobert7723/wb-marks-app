@@ -128,6 +128,7 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn('id="mapping-save-button" class="secondary" disabled', page.text)
             self.assertIn('id="label-template-select"', page.text)
             self.assertIn('<option value="srad" selected>SRad</option>', page.text)
+            self.assertIn('<option value="simple_brand">SIMPLE Brand</option>', page.text)
             self.assertIn('id="print-labels-button"', page.text)
             self.assertIn('id="print-history-button"', page.text)
             self.assertIn('id="print-history-panel" class="card order-history-panel print-history-panel"', page.text)

@@ -444,9 +444,17 @@ def _looks_like_header(value: str) -> bool:
 
 def _normalize_template(value: str) -> str:
     template = (value or "srad").strip().lower()
-    aliases = {"combined": "srad", "58x40_full": "srad", "wb_chz_58x40": "srad"}
+    aliases = {
+        "combined": "srad",
+        "58x40_full": "srad",
+        "wb_chz_58x40": "srad",
+        "simple brand": "simple_brand",
+        "simple-brand": "simple_brand",
+        "simplebrand": "simple_brand",
+        "58x40_simple_brand": "simple_brand",
+    }
     template = aliases.get(template, template)
-    return template if template in {"srad", "simple", "medium", "wb", "chz", "note"} else "srad"
+    return template if template in {"srad", "simple", "simple_brand", "medium", "wb", "chz", "note"} else "srad"
 
 
 def _normalize_ai_parentheses(value: str) -> str:

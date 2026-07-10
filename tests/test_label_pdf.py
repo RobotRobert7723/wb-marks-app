@@ -76,10 +76,12 @@ class LabelPdfTests(unittest.TestCase):
         )
 
         simple_pdf = render_labels_pdf([label], template="simple")
+        simple_brand_pdf = render_labels_pdf([label], template="simple_brand")
         medium_pdf = render_labels_pdf([label], template="medium")
 
         self.assertEqual("simple", label.template)
         self.assertEqual(2, _pdf_page_count(simple_pdf))
+        self.assertEqual(4, _pdf_page_count(simple_brand_pdf))
         self.assertEqual(3, _pdf_page_count(medium_pdf))
 
     def test_combined_template_alias_still_renders_srad_set(self) -> None:

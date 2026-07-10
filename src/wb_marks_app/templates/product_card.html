@@ -581,6 +581,7 @@
           <select id="label-template-select">
             <option value="srad" selected>SRad</option>
             <option value="simple">Simple</option>
+            <option value="simple_brand">SIMPLE Brand</option>
             <option value="medium">Medium</option>
           </select>
         </div>
@@ -1166,6 +1167,7 @@
     [
       { value: 'srad', label: 'SRad' },
       { value: 'simple', label: 'Simple' },
+      { value: 'simple_brand', label: 'SIMPLE Brand' },
       { value: 'medium', label: 'Medium' },
     ].forEach((template) => {
       const option = document.createElement('option');
@@ -1222,6 +1224,7 @@
   function printTemplateValue(value) {
     const normalized = String(value || '').trim().toLowerCase();
     if (normalized === 'simple') return 'simple';
+    if (normalized === 'simple brand' || normalized === 'simple-brand' || normalized === 'simplebrand' || normalized === 'simple_brand') return 'simple_brand';
     if (normalized === 'medium') return 'medium';
     return 'srad';
   }
