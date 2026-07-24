@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -48,11 +48,13 @@ from wb_marks_app.server_settings import (
     get_or_create_settings,
     settings_public_dict,
     settings_to_app_config,
+    teksher_company_gcp_label,
     update_settings,
 )
 from wb_marks_app.services.browser import BrowserSessionManager
 from wb_marks_app.services.gtin_excel import GtinExcelParser
 from wb_marks_app.services.gtin_request import build_gtin_request_workbook
+from wb_marks_app.services.gpc_catalog import gpc_catalog_description, search_gpc_catalog
 from wb_marks_app.services.label_pdf import LabelPdfError, render_labels_pdf
 from wb_marks_app.services.labels import (
     build_manual_labels,
@@ -75,6 +77,20 @@ gtin_excel_parser = GtinExcelParser()
 teksher_mapping_service = TeksherMappingService()
 teksher_product_service = TeksherService(BrowserSessionManager(Path.cwd() / ".teksher-product-cards"))
 _LABEL_PDF_ID_RE = re.compile(r"^[a-f0-9]{32}$")
+_LABEL_FILE_TOKEN_RE = re.compile(r"[^0-9A-Za-zА-Яа-яЁё._-]+")
+ACTIVE_WORKFLOW_ITEM_STATUSES = {
+    "pending",
+    "created",
+    "order_running",
+    "order_created",
+    "order_completed",
+    "marking_running",
+    "marking_created",
+    "marking_completed",
+    "csv_saved",
+    "transgran_running",
+}
+TERMINAL_LABEL_API_JOB_STATUSES = {"done", "partial_failed", "ready", "success", "completed"}
 
 
 def _raw_settings_dict(settings: AppSettingsModel) -> dict[str, str]:
@@ -82,6 +98,31 @@ def _raw_settings_dict(settings: AppSettingsModel) -> dict[str, str]:
         "wb_api_token": settings.wb_api_token,
         "teksher_password": settings.teksher_password,
     }
+
+
+def _refresh_teksher_company_gcp_if_needed(
+    settings: AppSettingsModel,
+    previous_teksher_username: str,
+    previous_teksher_password: str,
+) -> str:
+    if not settings.teksher_username.strip() or not settings.teksher_password.strip():
+        return ""
+
+    credentials_changed = (
+        settings.teksher_username != previous_teksher_username
+        or settings.teksher_password != previous_teksher_password
+    )
+    if settings.teksher_uot_name.strip() and settings.teksher_gcp.strip() and not credentials_changed:
+        return ""
+
+    try:
+        profile = teksher_product_service.fetch_company_gcp_profile(settings_to_app_config(settings))
+    except (AppError, ManualStepRequired) as exc:
+        return f"УОТ/GCP из Текшер не загружены: {exc}"
+
+    settings.teksher_uot_name = str(profile.get("name") or "").strip()
+    settings.teksher_gcp = str(profile.get("gcp") or "").strip()
+    return "УОТ/GCP из Текшер загружены."
 
 
 def create_app() -> FastAPI:
@@ -118,6 +159,17 @@ def create_app() -> FastAPI:
     @app.get("/ready")
     def ready() -> dict:
         return {"status": "ready"}
+
+    @app.get("/api/v1/labels/templates")
+    async def label_api_templates(request: Request):
+        auth_error = _label_api_auth_error(request)
+        if auth_error is not None:
+            return auth_error
+        return {
+            "status": "ok",
+            "defaultTemplate": DEFAULT_PRODUCT_CARD_LABEL_TEMPLATE,
+            "templates": _label_api_template_options(),
+        }
 
     @app.post("/api/v1/labels/readiness")
     async def label_api_readiness(request: Request):
@@ -175,6 +227,7 @@ def create_app() -> FastAPI:
             if existing is not None:
                 if existing.request_hash != request_hash:
                     return _label_api_error("requestId уже использован с другими параметрами", 409)
+                _resume_label_api_job_run_if_needed(existing)
                 _refresh_label_api_job(request, session, existing)
                 return JSONResponse(_serialize_label_api_job(request, existing), status_code=200)
 
@@ -188,7 +241,7 @@ def create_app() -> FastAPI:
             version, mapping_rows = teksher_mapping_service.latest_payload(session, user.id, nm_id)
             if version == 0 or not mapping_rows:
                 return _label_api_error("Не найден мэппинг для карточки WB.", 422, settingsUrl=settings_url)
-            workflow_rows = _label_api_workflow_rows(mapping_rows, normalized["items"])
+            workflow_rows = _label_api_workflow_rows(mapping_rows, normalized["items"], normalized["template"])
             missing = _label_api_missing_item_sizes(workflow_rows, normalized["items"])
             if missing:
                 return _label_api_error(
@@ -244,8 +297,57 @@ def create_app() -> FastAPI:
             job = session.get(LabelApiJobModel, job_id)
             if job is None:
                 return _label_api_error("Print job not found.", 404)
+            _resume_label_api_job_run_if_needed(job)
             _refresh_label_api_job(request, session, job)
             return _serialize_label_api_job(request, job)
+
+    @app.post("/api/v1/labels/print-jobs/{job_id}/retry")
+    async def retry_label_api_print_job(request: Request, job_id: str):
+        auth_error = _label_api_auth_error(request)
+        if auth_error is not None:
+            return auth_error
+        try:
+            payload = await _label_api_json_payload(request)
+        except ValueError:
+            payload = {}
+        sizes = _label_api_sizes(payload.get("sizes")) if isinstance(payload, dict) else []
+
+        try:
+            with session_scope() as session:
+                job = session.get(LabelApiJobModel, job_id)
+                if job is None:
+                    return _label_api_error("Print job not found.", 404)
+                run = session.get(WorkflowRunModel, job.run_id) if job.run_id else None
+                if run is None:
+                    return _label_api_error("Workflow run not found.", 404)
+
+                run.status = "running"
+                run.error = ""
+                selected_size_keys = {_product_card_size_key(size) for size in sizes}
+                job_size_keys = {_product_card_size_key(row.size) for row in job.rows}
+                if selected_size_keys and not selected_size_keys.intersection(job_size_keys):
+                    return _label_api_error("No matching job rows to retry.", 422)
+
+                item_ids_to_retry = _label_api_retry_failed_item_ids(run, selected_size_keys)
+                _reset_label_api_job_rows_for_retry(job, selected_size_keys)
+                job.status = "processing"
+                job.error = ""
+                session.flush()
+                run_id = run.id
+
+            if item_ids_to_retry:
+                workflow_service.retry_items(run_id, set(item_ids_to_retry))
+            else:
+                workflow_service.start_background(run_id)
+
+            with session_scope() as session:
+                job = session.get(LabelApiJobModel, job_id)
+                if job is None:
+                    return _label_api_error("Print job not found.", 404)
+                _refresh_label_api_job(request, session, job)
+                return _serialize_label_api_job(request, job)
+        except ValueError as exc:
+            return _label_api_error(str(exc), 422)
 
     @app.get("/api/v1/labels/files/{file_id}.pdf", name="download_label_api_pdf")
     def download_label_api_pdf(request: Request, file_id: str):
@@ -255,17 +357,24 @@ def create_app() -> FastAPI:
         if not _LABEL_PDF_ID_RE.fullmatch(file_id):
             raise HTTPException(status_code=404, detail="PDF not found")
         with session_scope() as session:
-            job = session.execute(
-                select(LabelApiJobModel).where(LabelApiJobModel.pdf_file_id == file_id)
+            print_job = session.execute(
+                select(LabelPrintJobModel).where(LabelPrintJobModel.file_id == file_id)
             ).scalars().first()
-            if job is None or not job.user_id:
-                raise HTTPException(status_code=404, detail="PDF not found")
-            file_path = _label_pdf_file_path(job.user_id, file_id)
+            if print_job is not None and print_job.user_id:
+                user_id = print_job.user_id
+            else:
+                job = session.execute(
+                    select(LabelApiJobModel).where(LabelApiJobModel.pdf_file_id == file_id)
+                ).scalars().first()
+                if job is None or not job.user_id:
+                    raise HTTPException(status_code=404, detail="PDF not found")
+                user_id = job.user_id
+            file_path = _label_pdf_file_path(user_id, file_id)
         if not file_path.exists():
             raise HTTPException(status_code=404, detail="PDF not found")
         return FileResponse(
             path=file_path,
-            filename=f"labels_{file_id[:8]}_58x40.pdf",
+            filename=_label_pdf_download_file_name(user_id, file_id),
             media_type="application/pdf",
         )
 
@@ -485,14 +594,25 @@ def create_app() -> FastAPI:
             "transgran_document_number_prefix": transgran_document_number_prefix.strip() or "WB",
             "step_timeout_seconds": step_timeout_seconds,
         }
+        message = "Settings saved."
         with session_scope() as session:
+            current_settings = get_or_create_settings(session, user_id)
+            previous_teksher_username = current_settings.teksher_username
+            previous_teksher_password = current_settings.teksher_password
             settings = update_settings(session, user_id, payload)
+            profile_message = _refresh_teksher_company_gcp_if_needed(
+                settings,
+                previous_teksher_username,
+                previous_teksher_password,
+            )
+            if profile_message:
+                message = f"{message} {profile_message}"
             public = settings_public_dict(settings)
             raw_settings = _raw_settings_dict(settings)
         return templates.TemplateResponse(
             request,
             "settings.html",
-            _base_context(request, settings=public, raw_settings=raw_settings, message="Settings saved."),
+            _base_context(request, settings=public, raw_settings=raw_settings, message=message),
         )
 
     @app.get("/runs", response_class=HTMLResponse)
@@ -620,14 +740,27 @@ def create_app() -> FastAPI:
         )
         with session_scope() as session:
             ready_to_print_counts = _product_card_ready_to_print_counts(session, user_id, product_card.wb_article)
+            gpc_mapping = _product_card_gpc_mapping(session, product_card.wb_summary.seller_category)
         product_card = _apply_product_card_ready_to_print_counts(product_card, ready_to_print_counts)
         if teksher_status:
             product_card = replace(product_card, api_status=(product_card.api_status + teksher_status).strip())
         return templates.TemplateResponse(
             request,
             "product_card.html",
-            _base_context(request, product_card=product_card),
+            _base_context(request, product_card=product_card, gpc_mapping=gpc_mapping),
         )
+
+    @app.get("/api/gpc-catalog")
+    def gpc_catalog(request: Request, q: str = "", limit: str = "50"):
+        if not _user_id_from_session(request):
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        try:
+            safe_limit = int(limit or 50)
+        except (TypeError, ValueError):
+            safe_limit = 50
+        safe_limit = max(1, min(safe_limit, 100))
+        with session_scope() as session:
+            return {"items": search_gpc_catalog(session, q, safe_limit)}
 
     @app.post("/api/product-cards/{wb_article}/gtin-upload")
     async def upload_product_card_gtin(request: Request, wb_article: str, file: UploadFile = File(...)):
@@ -682,6 +815,7 @@ def create_app() -> FastAPI:
         with session_scope() as session:
             settings = get_or_create_settings(session, user_id)
             config = settings_to_app_config(settings)
+            company_gcp_label = teksher_company_gcp_label(settings)
         product_card = product_card_service.build_template(wb_article, config)
         category = product_card.wb_summary.seller_category.strip()
         if not category:
@@ -692,24 +826,29 @@ def create_app() -> FastAPI:
         requested_gpc_code = _normalize_gpc_code(payload.get("gpc_code"))
         if payload.get("gpc_code") and not requested_gpc_code:
             return JSONResponse({"ok": False, "message": "Код GPC должен состоять из 8 цифр."}, status_code=400)
+        with session_scope() as session:
+            requested_gpc_description = gpc_catalog_description(session, requested_gpc_code)
+        if requested_gpc_code and not requested_gpc_description:
+            return JSONResponse({"ok": False, "message": "Код GPC не найден в справочнике."}, status_code=400)
 
         with session_scope() as session:
-            gpc_code = _product_card_gpc_code(session, category)
-            if not gpc_code:
-                if not requested_gpc_code:
-                    return JSONResponse(
-                        {
-                            "ok": False,
-                            "gpc_required": True,
-                            "category": category,
-                            "message": f"Укажите код GPC для категории WB: {category}",
-                        },
-                        status_code=409,
-                    )
-                _save_product_card_gpc_code(session, category, requested_gpc_code)
-                gpc_code = requested_gpc_code
+            current_gpc = _product_card_gpc_mapping(session, category)
+            if not requested_gpc_code:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "gpc_required": True,
+                        "category": category,
+                        "current_gpc": current_gpc,
+                        "items": search_gpc_catalog(session, category, 50),
+                        "message": f"Выберите код GPC для категории WB: {category}",
+                    },
+                    status_code=409,
+                )
+            _save_product_card_gpc_code(session, category, requested_gpc_code)
+            gpc_code = requested_gpc_code
 
-        content = build_gtin_request_workbook(product_card, gpc_code)
+        content = build_gtin_request_workbook(product_card, gpc_code, company_gcp_label)
         file_name = _gtin_request_file_name(product_card)
         return Response(
             content=content,
@@ -774,6 +913,8 @@ def create_app() -> FastAPI:
             draft_ids = draft_result.get("draft_ids", [])
             created_gtins = draft_result.get("created_gtins", [])
             existing_gtins = draft_result.get("existing_gtins", [])
+            published_draft_ids = draft_result.get("published_draft_ids", [])
+            publish_forbidden_ids = draft_result.get("publish_forbidden_ids", [])
             with session_scope() as session:
                 version, created = teksher_mapping_service.save_version(
                     session,
@@ -791,10 +932,12 @@ def create_app() -> FastAPI:
 
         return {
             "ok": True,
-            "message": _product_mapping_save_message(version, created, created_gtins),
+            "message": _product_mapping_save_message(version, created, created_gtins, publish_forbidden_ids),
             "version": version,
             "rows_saved": created,
             "teksher_draft_ids": draft_ids,
+            "teksher_published_draft_ids": published_draft_ids,
+            "teksher_publish_forbidden_ids": publish_forbidden_ids,
             "created_gtins": created_gtins,
             "existing_gtins": existing_gtins,
         }
@@ -839,6 +982,7 @@ def create_app() -> FastAPI:
         if not user_id:
             return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
         with session_scope() as session:
+            _auto_print_product_card_completed_orders(request, session, user_id, wb_article)
             return {
                 "ok": True,
                 "history": _product_card_order_history(session, user_id, wb_article),
@@ -851,10 +995,30 @@ def create_app() -> FastAPI:
             return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
         with session_scope() as session:
             run = _get_user_run(session, run_id, user_id)
+            auto_prints = _auto_print_completed_order_items(request, session, user_id, wb_article, run)
             return {
                 "ok": True,
                 "status": _serialize_product_card_order_run(run, session),
+                "auto_prints": auto_prints,
             }
+
+    @app.post("/api/product-cards/{wb_article}/mark-orders/{run_id}/resume")
+    def resume_product_card_mark_order(request: Request, wb_article: str, run_id: str):
+        user_id = _user_id_from_session(request)
+        if not user_id:
+            return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
+        try:
+            with session_scope() as session:
+                run = _get_user_run(session, run_id, user_id)
+                _ensure_product_card_run(run, wb_article)
+            workflow_service.start_background(run_id)
+            with session_scope() as session:
+                run = _get_user_run(session, run_id, user_id)
+                return {"ok": True, "status": _serialize_product_card_order_run(run, session)}
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Run not found")
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
 
     @app.post("/api/product-cards/{wb_article}/mark-orders/{run_id}/retry-failed")
     def retry_product_card_failed_mark_order_items(request: Request, wb_article: str, run_id: str):
@@ -933,6 +1097,7 @@ def create_app() -> FastAPI:
                         user_id,
                         product_card,
                         _product_card_label_template(str(payload.get("template") or "srad")),
+                        run_item_ids={item_id},
                     )
                     response["print"] = print_result
                     response["print_history"] = _product_card_label_print_history(
@@ -940,6 +1105,7 @@ def create_app() -> FastAPI:
                         session,
                         user_id,
                         product_card.wb_article,
+                        run_item_id=item_id,
                     )
                 return response
         except KeyError:
@@ -973,14 +1139,20 @@ def create_app() -> FastAPI:
         return result
 
     @app.get("/api/product-cards/{wb_article}/label-prints")
-    def list_product_card_label_prints(request: Request, wb_article: str):
+    def list_product_card_label_prints(request: Request, wb_article: str, run_item_id: str = ""):
         user_id = _user_id_from_session(request)
         if not user_id:
             return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
         with session_scope() as session:
             return {
                 "ok": True,
-                "history": _product_card_label_print_history(request, session, user_id, wb_article),
+                "history": _product_card_label_print_history(
+                    request,
+                    session,
+                    user_id,
+                    wb_article,
+                    run_item_id=run_item_id or None,
+                ),
             }
 
     @app.post("/api/product-cards/{wb_article}/label-prints/{print_id}/repeat")
@@ -1251,7 +1423,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="PDF not found")
         return FileResponse(
             path=file_path,
-            filename=f"labels_{file_id[:8]}_58x40.pdf",
+            filename=_label_pdf_download_file_name(user_id, file_id),
             media_type="application/pdf",
         )
 
@@ -1352,8 +1524,19 @@ def create_app() -> FastAPI:
             return JSONResponse({"login_required": True, "login_url": "/login"}, status_code=401)
         payload = await request.json()
         with session_scope() as session:
+            current_settings = get_or_create_settings(session, user_id)
+            previous_teksher_username = current_settings.teksher_username
+            previous_teksher_password = current_settings.teksher_password
             settings = update_settings(session, user_id, payload)
-            return settings_public_dict(settings)
+            profile_message = _refresh_teksher_company_gcp_if_needed(
+                settings,
+                previous_teksher_username,
+                previous_teksher_password,
+            )
+            public = settings_public_dict(settings)
+            if profile_message:
+                public["teksher_company_gcp_message"] = profile_message
+            return public
 
     @app.post("/api/settings/validate")
     async def validate_settings(request: Request):
@@ -1511,18 +1694,21 @@ def _create_product_card_label_pdf(
     user_id: str,
     product_card,
     template: str,
+    run_item_ids: set[str] | None = None,
 ) -> dict:
-    sources = _product_card_label_print_sources(session, user_id, product_card)
+    sources = _product_card_label_print_sources(session, user_id, product_card, run_item_ids=run_item_ids)
     if not sources:
         raise ValueError("Нет готовых к печати этикеток для этой карточки.")
 
-    total = sum(len(source["mark_codes"]) for source in sources)
     label_settings = _product_card_label_settings(session, user_id)
-    labels = []
+    files: list[dict] = []
+    total_labels = 0
     for source in sources:
         item = source["item"]
         row = source["row"]
-        for code in source["mark_codes"]:
+        mark_codes = source["mark_codes"]
+        labels = []
+        for index, code in enumerate(mark_codes, start=1):
             labels.append(
                 make_label_record(
                     template=template,
@@ -1534,8 +1720,8 @@ def _create_product_card_label_pdf(
                     wb_barcode=item.barcode or row.barcode,
                     mark_code=code,
                     unit_count="1",
-                    index=len(labels) + 1,
-                    total=total,
+                    index=index,
+                    total=len(mark_codes),
                     supplier_name=label_settings["supplier_name"],
                     production_date=label_settings["production_date"],
                     country_of_origin=row.country or product_card.wb_summary.country,
@@ -1544,42 +1730,55 @@ def _create_product_card_label_pdf(
                 )
             )
 
-    pdf = render_labels_pdf(labels, template=template)
-    file_id = uuid.uuid4().hex
-    file_name = f"wb_{product_card.wb_article}_{file_id[:8]}_58x40.pdf"
-    file_path = _label_pdf_file_path(user_id, file_id)
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_bytes(pdf)
+        pdf = render_labels_pdf(labels, template=template)
+        file_id = uuid.uuid4().hex
+        file_name = _product_card_label_pdf_file_name(product_card, [source])
+        file_path = _label_pdf_file_path(user_id, file_id)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_bytes(pdf)
 
-    for source in sources:
-        item = source["item"]
-        row = source["row"]
         session.add(
             LabelPrintJobModel(
                 user_id=user_id,
+                run_item_id=item.id,
                 wb_article=product_card.wb_article,
                 wb_size=item.size or row.wb_size,
                 gtin=item.gtin,
                 barcode=item.barcode or row.barcode,
                 vendor_code=item.vendor_code or row.vendor_article or product_card.wb_summary.seller_article,
-                quantity=len(source["mark_codes"]),
+                quantity=len(mark_codes),
                 template=template,
                 file_id=file_id,
                 file_name=file_name,
                 status="created",
             )
         )
+        pages_count = _pdf_page_count(pdf)
+        download_url = _app_url_for(request, "download_label_pdf_api", file_id=file_id)
+        files.append(
+            {
+                "download_url": download_url,
+                "file_id": file_id,
+                "file_name": file_name,
+                "labels_count": len(mark_codes),
+                "pages_count": pages_count,
+                "size": item.size or row.wb_size,
+            }
+        )
+        total_labels += len(mark_codes)
 
     session.flush()
+    first_file = files[0]
     return {
         "ok": True,
-        "message": f"PDF этикеток создан: {total}.",
+        "message": f"PDF этикеток создано: {len(files)}; этикеток: {total_labels}.",
         "template": template,
-        "download_url": _app_url_for(request, "download_label_pdf_api", file_id=file_id),
-        "file_id": file_id,
-        "file_name": file_name,
-        "labels_count": total,
-        "pages_count": _pdf_page_count(pdf),
+        "download_url": first_file["download_url"],
+        "file_id": first_file["file_id"],
+        "file_name": first_file["file_name"],
+        "labels_count": total_labels,
+        "pages_count": sum(file["pages_count"] for file in files),
+        "files": files,
         "history": _product_card_label_print_history(request, session, user_id, product_card.wb_article),
     }
 
@@ -1643,7 +1842,7 @@ def _repeat_product_card_label_pdf(
 
     pdf = render_labels_pdf(labels, template=template)
     file_id = uuid.uuid4().hex
-    file_name = f"wb_{product_card.wb_article}_{file_id[:8]}_58x40.pdf"
+    file_name = _product_card_label_pdf_file_name(product_card, [{"item": item, "row": row}])
     file_path = _label_pdf_file_path(user_id, file_id)
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_bytes(pdf)
@@ -1651,6 +1850,7 @@ def _repeat_product_card_label_pdf(
     session.add(
         LabelPrintJobModel(
             user_id=user_id,
+            run_item_id=print_job.run_item_id,
             wb_article=product_card.wb_article,
             wb_size=item.size or row.wb_size,
             gtin=item.gtin or print_job.gtin,
@@ -1667,15 +1867,172 @@ def _repeat_product_card_label_pdf(
 
     return {
         "ok": True,
-        "message": f"PDF РґР»СЏ РїРѕРІС‚РѕСЂРЅРѕР№ РїРµС‡Р°С‚Рё СЃРѕР·РґР°РЅ: {len(mark_codes)}.",
+        "message": f"PDF для повторной печати создан: {len(mark_codes)}.",
         "template": template,
         "download_url": _app_url_for(request, "download_label_pdf_api", file_id=file_id),
         "file_id": file_id,
         "file_name": file_name,
         "labels_count": len(mark_codes),
         "pages_count": _pdf_page_count(pdf),
-        "history": _product_card_label_print_history(request, session, user_id, product_card.wb_article),
+        "history": _product_card_label_print_history(
+            request,
+            session,
+            user_id,
+            product_card.wb_article,
+            run_item_id=print_job.run_item_id,
+        ),
     }
+
+
+def _auto_print_completed_order_items(
+    request: Request,
+    session: Session,
+    user_id: str,
+    wb_article: str,
+    run: WorkflowRunModel,
+) -> list[dict]:
+    results: list[dict] = []
+    items = session.execute(
+        select(WorkflowRunItemModel)
+        .where(WorkflowRunItemModel.run_id == run.id)
+        .where(WorkflowRunItemModel.status == "completed")
+        .order_by(WorkflowRunItemModel.size)
+    ).scalars().all()
+    for item in items:
+        if _product_card_ready_to_print_count_for_item(session, user_id, wb_article, item) <= 0:
+            continue
+        try:
+            result = _create_product_card_order_item_label_pdf(
+                request,
+                session,
+                user_id,
+                wb_article,
+                item,
+                template=item.label_template or DEFAULT_PRODUCT_CARD_LABEL_TEMPLATE,
+            )
+        except (LabelPdfError, ValueError) as exc:
+            results.append({"ok": False, "run_item_id": item.id, "message": str(exc)})
+            continue
+        if result:
+            results.append(result)
+    return results
+
+
+def _auto_print_product_card_completed_orders(
+    request: Request,
+    session: Session,
+    user_id: str,
+    wb_article: str,
+) -> list[dict]:
+    if not hasattr(session, "execute"):
+        return []
+    runs = session.execute(
+        select(WorkflowRunModel)
+        .where(WorkflowRunModel.user_id == user_id)
+        .where(WorkflowRunModel.source_url == f"/product-cards/{wb_article}")
+        .order_by(WorkflowRunModel.created_at.desc())
+    ).scalars().all()
+    results: list[dict] = []
+    for run in runs:
+        results.extend(_auto_print_completed_order_items(request, session, user_id, wb_article, run))
+    return results
+
+
+def _create_product_card_order_item_label_pdf(
+    request: Request,
+    session: Session,
+    user_id: str,
+    wb_article: str,
+    item: WorkflowRunItemModel,
+    *,
+    template: str,
+) -> dict | None:
+    template = _product_card_label_template(template)
+    mark_codes = _product_card_item_mark_codes(session, item)[: max(int(item.quantity or 0), 0)]
+    printed_count = _product_card_printed_quantity_for_item(session, user_id, wb_article, item)
+    mark_codes = mark_codes[printed_count:] if printed_count > 0 else mark_codes
+    if not mark_codes:
+        return None
+
+    label_settings = _product_card_label_settings(session, user_id)
+    payload = _product_card_item_label_payload(item)
+    labels = [
+        make_label_record(
+            template=template,
+            item_name=_capitalize_text(payload.get("item_name") or item.wb_item_name),
+            vendor_code=payload.get("vendor_code") or item.vendor_code,
+            size=payload.get("size") or item.size,
+            color=_lowercase_text(payload.get("color") or ""),
+            composition=payload.get("composition") or "",
+            wb_barcode=payload.get("barcode") or item.barcode,
+            mark_code=code,
+            unit_count="1",
+            index=index,
+            total=len(mark_codes),
+            supplier_name=label_settings["supplier_name"],
+            production_date=label_settings["production_date"],
+            country_of_origin=payload.get("country_of_origin") or "",
+            brand=payload.get("brand") or "",
+            supplier_address=label_settings["production_address"],
+        )
+        for index, code in enumerate(mark_codes, start=1)
+    ]
+
+    pdf = render_labels_pdf(labels, template=template)
+    file_id = uuid.uuid4().hex
+    file_name = _product_card_label_pdf_file_name(
+        None,
+        [
+            {
+                "item": item,
+                "row": None,
+                "vendor_code": payload.get("vendor_code") or item.vendor_code or wb_article,
+                "size": payload.get("size") or item.size,
+            }
+        ],
+    )
+    file_path = _label_pdf_file_path(user_id, file_id)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_bytes(pdf)
+
+    session.add(
+        LabelPrintJobModel(
+            user_id=user_id,
+            run_item_id=item.id,
+            wb_article=wb_article,
+            wb_size=item.size,
+            gtin=item.gtin,
+            barcode=payload.get("barcode") or item.barcode,
+            vendor_code=payload.get("vendor_code") or item.vendor_code,
+            quantity=len(mark_codes),
+            template=template,
+            file_id=file_id,
+            file_name=file_name,
+            status="created",
+        )
+    )
+    session.flush()
+
+    return {
+        "ok": True,
+        "run_item_id": item.id,
+        "template": template,
+        "download_url": _app_url_for(request, "download_label_pdf_api", file_id=file_id),
+        "file_id": file_id,
+        "file_name": file_name,
+        "labels_count": len(mark_codes),
+        "pages_count": _pdf_page_count(pdf),
+    }
+
+
+def _product_card_item_label_payload(item: WorkflowRunItemModel) -> dict[str, str]:
+    try:
+        raw = json.loads(item.label_payload_json or "{}")
+    except json.JSONDecodeError:
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    return {str(key): str(value or "").strip() for key, value in raw.items()}
 
 
 def _product_card_row_by_size(product_card, size: str):
@@ -1757,7 +2114,13 @@ def _lowercase_text(value: str) -> str:
     return str(value or "").strip().lower()
 
 
-def _product_card_label_print_sources(session: Session, user_id: str, product_card) -> list[dict]:
+def _product_card_label_print_sources(
+    session: Session,
+    user_id: str,
+    product_card,
+    *,
+    run_item_ids: set[str] | None = None,
+) -> list[dict]:
     if not hasattr(session, "execute"):
         return []
     rows_by_size = {_product_card_size_key(row.wb_size): row for row in product_card.rows}
@@ -1777,6 +2140,8 @@ def _product_card_label_print_sources(session: Session, user_id: str, product_ca
     sources: list[dict] = []
     seen: set[str] = set()
     for item, marking in rows:
+        if run_item_ids is not None and item.id not in run_item_ids:
+            continue
         size_key = _product_card_size_key(item.size)
         if not size_key or size_key in seen:
             continue
@@ -1813,6 +2178,8 @@ def _product_card_printed_quantity_for_item(
         .where(LabelPrintJobModel.gtin == (item.gtin or ""))
         .where(LabelPrintJobModel.status == "created")
     )
+    if item.id:
+        query = query.where(or_(LabelPrintJobModel.run_item_id == item.id, LabelPrintJobModel.run_item_id.is_(None)))
     if item.barcode:
         query = query.where(LabelPrintJobModel.barcode == item.barcode)
     if item.created_at:
@@ -1832,21 +2199,107 @@ def _product_card_ready_to_print_count_for_item(
     return max(mark_count - printed_count, 0)
 
 
-def _product_card_label_print_history(request: Request, session: Session, user_id: str, wb_article: str) -> list[dict]:
+def _product_card_label_print_history(
+    request: Request,
+    session: Session,
+    user_id: str,
+    wb_article: str,
+    *,
+    run_item_id: str | None = None,
+) -> list[dict]:
     if not hasattr(session, "execute"):
         return []
-    rows = session.execute(
+    query = (
         select(LabelPrintJobModel)
         .where(LabelPrintJobModel.user_id == user_id)
         .where(LabelPrintJobModel.wb_article == wb_article)
         .order_by(LabelPrintJobModel.created_at.desc())
-    ).scalars().all()
+    )
+    if run_item_id:
+        item = session.get(WorkflowRunItemModel, run_item_id)
+        if item is None:
+            return []
+        query = query.where(
+            or_(
+                LabelPrintJobModel.run_item_id == run_item_id,
+                _legacy_product_card_label_print_match(session, user_id, wb_article, item),
+            )
+        )
+    rows = session.execute(query).scalars().all()
     return [_serialize_product_card_label_print(request, row) for row in rows]
+
+
+def _legacy_product_card_label_print_match(
+    session: Session,
+    user_id: str,
+    wb_article: str,
+    item: WorkflowRunItemModel,
+):
+    conditions = [
+        LabelPrintJobModel.run_item_id.is_(None),
+        LabelPrintJobModel.wb_size == (item.size or ""),
+        LabelPrintJobModel.gtin == (item.gtin or ""),
+    ]
+    if item.barcode:
+        conditions.append(LabelPrintJobModel.barcode == item.barcode)
+    lower_bound = _product_card_run_item_csv_created_at(session, item) or item.created_at
+    if lower_bound:
+        conditions.append(LabelPrintJobModel.created_at >= lower_bound)
+    upper_bound = _next_product_card_run_item_created_at(session, user_id, wb_article, item)
+    if upper_bound:
+        conditions.append(LabelPrintJobModel.created_at < upper_bound)
+    return and_(*conditions)
+
+
+def _product_card_run_item_csv_created_at(session: Session, item: WorkflowRunItemModel):
+    artifact = session.execute(
+        select(ArtifactModel)
+        .where(ArtifactModel.run_item_id == item.id)
+        .where(ArtifactModel.kind == "csv")
+    ).scalars().first()
+    return artifact.created_at if artifact is not None else None
+
+
+def _next_product_card_run_item_created_at(
+    session: Session,
+    user_id: str,
+    wb_article: str,
+    item: WorkflowRunItemModel,
+):
+    if not item.created_at:
+        return None
+    query = (
+        select(WorkflowRunItemModel.created_at)
+        .join(WorkflowRunModel, WorkflowRunModel.id == WorkflowRunItemModel.run_id)
+        .where(WorkflowRunModel.user_id == user_id)
+        .where(WorkflowRunModel.source_url == f"/product-cards/{wb_article}")
+        .where(WorkflowRunItemModel.id != item.id)
+        .where(WorkflowRunItemModel.size == (item.size or ""))
+        .where(WorkflowRunItemModel.gtin == (item.gtin or ""))
+        .where(WorkflowRunItemModel.created_at > item.created_at)
+        .order_by(WorkflowRunItemModel.created_at.asc())
+    )
+    if item.barcode:
+        query = query.where(WorkflowRunItemModel.barcode == item.barcode)
+    return session.execute(query).scalars().first()
+
+
+def _product_card_label_print_count(session: Session, run_item_id: str | None) -> int:
+    if not run_item_id or not hasattr(session, "execute"):
+        return 0
+    return len(
+        session.execute(
+            select(LabelPrintJobModel.id)
+            .where(LabelPrintJobModel.run_item_id == run_item_id)
+            .where(LabelPrintJobModel.status == "created")
+        ).scalars().all()
+    )
 
 
 def _serialize_product_card_label_print(request: Request, row: LabelPrintJobModel) -> dict:
     return {
         "id": row.id,
+        "run_item_id": row.run_item_id or "",
         "created_at": row.created_at.isoformat() if row.created_at else "",
         "size": row.wb_size,
         "gtin": row.gtin,
@@ -1862,29 +2315,105 @@ def _serialize_product_card_label_print(request: Request, row: LabelPrintJobMode
     }
 
 
+def _label_pdf_download_file_name(user_id: str, file_id: str) -> str:
+    with session_scope() as session:
+        if not hasattr(session, "execute"):
+            return f"labels_{file_id[:8]}_58x40.pdf"
+        row = session.execute(
+            select(LabelPrintJobModel)
+            .where(LabelPrintJobModel.user_id == user_id)
+            .where(LabelPrintJobModel.file_id == file_id)
+            .where(LabelPrintJobModel.file_name != "")
+            .order_by(LabelPrintJobModel.created_at.desc())
+        ).scalars().first()
+        if row and row.file_name:
+            return row.file_name
+    return f"labels_{file_id[:8]}_58x40.pdf"
+
+
+def _product_card_label_pdf_file_name(product_card, sources: list[dict]) -> str:
+    vendor_codes: list[str] = []
+    sizes: list[str] = []
+    for source in sources:
+        item = source.get("item")
+        row = source.get("row")
+        vendor_codes.append(
+            str(source.get("vendor_code") or "").strip()
+            or str(source.get("vendor_article") or "").strip()
+            or
+            _source_value(item, "vendor_code")
+            or _source_value(row, "vendor_article")
+            or _source_value(getattr(product_card, "wb_summary", None), "seller_article")
+            or _source_value(product_card, "wb_article")
+        )
+        sizes.append(
+            str(source.get("size") or "").strip()
+            or _source_value(item, "size")
+            or _source_value(row, "wb_size")
+        )
+
+    vendor_part = _single_or_common_token(vendor_codes, fallback=_source_value(product_card, "wb_article") or "labels")
+    unique_sizes = list(dict.fromkeys(str(size or "").strip() for size in sizes if str(size or "").strip()))
+    if len(unique_sizes) != 1:
+        raise ValueError("В одном PDF должен быть только один размер.")
+    size_part = _safe_label_file_token(unique_sizes[0], "size")
+    return f"wb_{vendor_part}_{size_part}.pdf"
+
+
+def _single_or_common_token(values: list[str], *, fallback: str) -> str:
+    normalized = [str(value or "").strip() for value in values if str(value or "").strip()]
+    unique = list(dict.fromkeys(normalized))
+    if len(unique) == 1:
+        return _safe_label_file_token(unique[0], fallback)
+    return _safe_label_file_token(fallback, "labels")
+
+
+def _safe_label_file_token(value: str, fallback: str) -> str:
+    token = _LABEL_FILE_TOKEN_RE.sub("_", str(value or "").strip())
+    token = re.sub(r"_+", "_", token).strip("._-")
+    return (token[:80].strip("._-") or fallback)
+
+
+def _source_value(source, attr: str) -> str:
+    return str(getattr(source, attr, "") or "").strip()
+
+
+DEFAULT_PRODUCT_CARD_LABEL_TEMPLATE = "srad"
+PRODUCT_CARD_LABEL_TEMPLATES = (
+    {"id": "srad", "name": "SRad"},
+    {"id": "simple", "name": "Simple"},
+    {"id": "simple_brand", "name": "SIMPLE Brand"},
+    {"id": "medium", "name": "Medium"},
+)
+PRODUCT_CARD_LABEL_TEMPLATE_ALIASES = {
+    "srad": "srad",
+    "combined": "srad",
+    "58x40_full": "srad",
+    "simple": "simple",
+    "58x40_simple": "simple",
+    "simple_brand": "simple_brand",
+    "simple brand": "simple_brand",
+    "simple-brand": "simple_brand",
+    "simplebrand": "simple_brand",
+    "58x40_simple_brand": "simple_brand",
+    "medium": "medium",
+    "58x40_medium": "medium",
+}
+
+
+def _label_api_template_options() -> list[dict[str, str]]:
+    return [dict(template) for template in PRODUCT_CARD_LABEL_TEMPLATES]
+
+
 def _product_card_label_template(value: str) -> str:
-    key = str(value or "srad").strip().casefold()
-    aliases = {
-        "srad": "srad",
-        "combined": "srad",
-        "58x40_full": "srad",
-        "simple": "simple",
-        "58x40_simple": "simple",
-        "simple_brand": "simple_brand",
-        "simple brand": "simple_brand",
-        "simple-brand": "simple_brand",
-        "simplebrand": "simple_brand",
-        "58x40_simple_brand": "simple_brand",
-        "medium": "medium",
-        "58x40_medium": "medium",
-    }
-    if key not in aliases:
+    key = str(value or DEFAULT_PRODUCT_CARD_LABEL_TEMPLATE).strip().casefold()
+    if key not in PRODUCT_CARD_LABEL_TEMPLATE_ALIASES:
         raise ValueError("Неизвестный шаблон печати этикеток.")
-    return aliases[key]
+    return PRODUCT_CARD_LABEL_TEMPLATE_ALIASES[key]
 
 
 def _product_card_label_template_label(value: str) -> str:
-    labels = {"srad": "SRad", "simple": "Simple", "simple_brand": "SIMPLE Brand", "medium": "Medium"}
+    labels = {template["id"]: template["name"] for template in PRODUCT_CARD_LABEL_TEMPLATES}
     return labels.get(_product_card_label_template(value), "SRad")
 
 
@@ -1961,6 +2490,7 @@ def _serialize_product_card_order_item(item: WorkflowRunItemModel, session: Sess
         "size": item.size,
         "gtin": item.gtin,
         "quantity": item.quantity,
+        "label_template": item.label_template or DEFAULT_PRODUCT_CARD_LABEL_TEMPLATE,
         "ready_to_print_count": ready_to_print_count,
         "document_number": item.document_number,
         "status": item.status,
@@ -1968,6 +2498,7 @@ def _serialize_product_card_order_item(item: WorkflowRunItemModel, session: Sess
         "error": item.error,
         "artifact_id": artifact.id if artifact else None,
         "artifact_name": artifact.file_name if artifact else None,
+        "print_history_count": _product_card_label_print_count(session, item.id),
         "operations": [
             {
                 "kind": operation.operation_kind,
@@ -2142,7 +2673,42 @@ def _label_api_existing_job(session: Session, wb_store_id: str, request_id: str)
     ).scalars().first()
 
 
-def _label_api_workflow_rows(mapping_rows: list[dict], items: list[dict]) -> list[dict]:
+def _resume_label_api_job_run_if_needed(job: LabelApiJobModel) -> None:
+    if not job.run_id:
+        return
+    if job.status in TERMINAL_LABEL_API_JOB_STATUSES and job.pdf_file_id:
+        return
+    with session_scope() as session:
+        run = session.get(WorkflowRunModel, job.run_id)
+        if run is None or run.status in {"cancelled", "completed", "partial_failed"}:
+            return
+        run.status = "running"
+        run.error = ""
+    workflow_service.start_background(job.run_id)
+
+
+def _label_api_retry_failed_item_ids(run: WorkflowRunModel, selected_size_keys: set[str]) -> list[str]:
+    item_ids: list[str] = []
+    for item in run.items:
+        if selected_size_keys and _product_card_size_key(item.size) not in selected_size_keys:
+            continue
+        if item.status == "failed":
+            item_ids.append(item.id)
+    return item_ids
+
+
+def _reset_label_api_job_rows_for_retry(job: LabelApiJobModel, selected_size_keys: set[str]) -> None:
+    for row in job.rows:
+        if selected_size_keys and _product_card_size_key(row.size) not in selected_size_keys:
+            continue
+        if row.status == "ready" and row.pdf_url:
+            continue
+        row.status = "emission"
+        row.error_message = ""
+        row.pdf_url = ""
+
+
+def _label_api_workflow_rows(mapping_rows: list[dict], items: list[dict], template: str = DEFAULT_PRODUCT_CARD_LABEL_TEMPLATE) -> list[dict]:
     mapping_by_size = {_product_card_size_key(row.get("wb_size", "")): row for row in mapping_rows if row.get("gtin")}
     rows: list[dict] = []
     for item in items:
@@ -2155,6 +2721,7 @@ def _label_api_workflow_rows(mapping_rows: list[dict], items: list[dict]) -> lis
                 "gtin": _label_api_text(mapping.get("gtin")),
                 "quantity": int(item["quantity"]),
                 "transgran": True,
+                "label_template": _product_card_label_template(template),
             }
         )
     return rows
@@ -2165,8 +2732,8 @@ def _label_api_missing_item_sizes(workflow_rows: list[dict], items: list[dict]) 
     return [item["size"] for item in items if _product_card_size_key(item["size"]) not in found]
 
 
-def _refresh_label_api_job(request: Request, session: Session, job: LabelApiJobModel) -> None:
-    if job.status == "done":
+def _refresh_label_api_job(request: Request | None, session: Session, job: LabelApiJobModel) -> None:
+    if job.status in TERMINAL_LABEL_API_JOB_STATUSES and job.pdf_file_id:
         return
     if not job.run_id:
         job.status = "error"
@@ -2191,6 +2758,7 @@ def _refresh_label_api_job(request: Request, session: Session, job: LabelApiJobM
     has_failed = False
     has_active = False
     has_completed = False
+    completed_rows_without_pdf: list[LabelApiJobRowModel] = []
     for row in job.rows:
         item = items_by_size.get(_product_card_size_key(row.size))
         if item is None:
@@ -2208,12 +2776,18 @@ def _refresh_label_api_job(request: Request, session: Session, job: LabelApiJobM
             row.status = "ready" if job.pdf_file_id else "transgran"
             row.error_message = ""
             has_completed = True
+            if not job.pdf_file_id:
+                completed_rows_without_pdf.append(row)
             continue
         row.status = _label_api_row_status(item.status)
         row.error_message = ""
         has_active = True
 
     if has_completed and not has_active and not job.pdf_file_id:
+        for row in completed_rows_without_pdf:
+            row.status = "pdf_pending"
+            row.error_message = "\u041a\u043e\u0434\u044b \u043f\u043e\u043b\u0443\u0447\u0435\u043d\u044b, \u0444\u043e\u0440\u043c\u0438\u0440\u0443\u0435\u043c PDF."
+        session.flush()
         try:
             _create_label_api_job_pdf(request, session, job)
         except Exception as exc:
@@ -2234,7 +2808,8 @@ def _refresh_label_api_job(request: Request, session: Session, job: LabelApiJobM
         for row in job.rows:
             if row.status != "error":
                 row.status = "ready"
-                row.pdf_url = pdf_url
+                if not row.pdf_url:
+                    row.pdf_url = pdf_url
                 row.error_message = ""
     elif has_failed and not has_active:
         job.status = "error"
@@ -2255,7 +2830,9 @@ def _label_api_row_status(item_status: str) -> str:
     return "emission"
 
 
-def _create_label_api_job_pdf(request: Request, session: Session, job: LabelApiJobModel) -> None:
+def _create_label_api_job_pdf(request: Request | None, session: Session, job: LabelApiJobModel) -> None:
+    if job.pdf_file_id:
+        return
     if not job.user_id:
         raise ValueError("Job user is not linked.")
     settings = get_or_create_settings(session, job.user_id)
@@ -2274,7 +2851,6 @@ def _create_label_api_job_pdf(request: Request, session: Session, job: LabelApiJ
     ).scalars().all()
 
     sources: list[dict] = []
-    total = 0
     for item in run_items:
         size_key = _product_card_size_key(item.size)
         job_row = job_rows_by_size.get(size_key)
@@ -2288,16 +2864,19 @@ def _create_label_api_job_pdf(request: Request, session: Session, job: LabelApiJ
         if not codes:
             raise ValueError(f"Нет кодов маркировки для размера {item.size}.")
         sources.append({"item": item, "row": product_row, "job_row": job_row, "mark_codes": codes})
-        total += len(codes)
 
     if not sources:
         raise ValueError("Нет готовых кодов маркировки для печати.")
 
-    labels = []
+    first_file_id = ""
+    first_pdf_url = ""
     for source in sources:
         item = source["item"]
         row = source["row"]
-        for code in source["mark_codes"]:
+        job_row = source["job_row"]
+        mark_codes = source["mark_codes"]
+        labels = []
+        for index, code in enumerate(mark_codes, start=1):
             labels.append(
                 make_label_record(
                     template=job.template,
@@ -2309,8 +2888,8 @@ def _create_label_api_job_pdf(request: Request, session: Session, job: LabelApiJ
                     wb_barcode=item.barcode or row.barcode,
                     mark_code=code,
                     unit_count="1",
-                    index=len(labels) + 1,
-                    total=total,
+                    index=index,
+                    total=len(mark_codes),
                     supplier_name=label_settings["supplier_name"],
                     production_date=label_settings["production_date"],
                     country_of_origin=row.country or product_card.wb_summary.country,
@@ -2319,26 +2898,26 @@ def _create_label_api_job_pdf(request: Request, session: Session, job: LabelApiJ
                 )
             )
 
-    pdf = render_labels_pdf(labels, template=job.template)
-    file_id = uuid.uuid4().hex
-    file_name = f"wb_{product_card.wb_article}_{file_id[:8]}_58x40.pdf"
-    file_path = _label_pdf_file_path(job.user_id, file_id)
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_bytes(pdf)
-
-    for source in sources:
-        item = source["item"]
-        row = source["row"]
-        job_row = source["job_row"]
+        pdf = render_labels_pdf(labels, template=job.template)
+        file_id = uuid.uuid4().hex
+        file_name = _product_card_label_pdf_file_name(product_card, [source])
+        file_path = _label_pdf_file_path(job.user_id, file_id)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_bytes(pdf)
+        pdf_url = _label_api_file_url(request, file_id)
+        if not first_file_id:
+            first_file_id = file_id
+            first_pdf_url = pdf_url
         session.add(
             LabelPrintJobModel(
                 user_id=job.user_id,
+                run_item_id=item.id,
                 wb_article=product_card.wb_article,
                 wb_size=item.size or row.wb_size,
                 gtin=item.gtin,
                 barcode=item.barcode or row.barcode,
                 vendor_code=item.vendor_code or row.vendor_article or product_card.wb_summary.seller_article,
-                quantity=len(source["mark_codes"]),
+                quantity=len(mark_codes),
                 template=job.template,
                 file_id=file_id,
                 file_name=file_name,
@@ -2346,10 +2925,10 @@ def _create_label_api_job_pdf(request: Request, session: Session, job: LabelApiJ
             )
         )
         job_row.status = "ready"
-        job_row.pdf_url = _label_api_file_url(request, file_id)
+        job_row.pdf_url = pdf_url
 
-    job.pdf_file_id = file_id
-    job.pdf_url = _label_api_file_url(request, file_id)
+    job.pdf_file_id = first_file_id
+    job.pdf_url = first_pdf_url
     session.flush()
 
 
@@ -2373,6 +2952,7 @@ def _serialize_label_api_job_row(row: LabelApiJobRowModel) -> dict:
         "size": row.size,
         "quantity": row.quantity,
         "status": row.status,
+        "statusLabel": _label_api_status_label(row.status),
         "readyToPrintCount": ready_count,
     }
     if row.pdf_url:
@@ -2382,7 +2962,34 @@ def _serialize_label_api_job_row(row: LabelApiJobRowModel) -> dict:
     return payload
 
 
-def _label_api_file_url(request: Request, file_id: str) -> str:
+def _label_api_status_label(status: str) -> str:
+    labels = {
+        "emission": "\u044d\u043c\u0438\u0441\u0441\u0438\u044f",
+        "applying": "\u043d\u0430\u043d\u0435\u0441\u0435\u043d\u0438\u0435",
+        "transgran": "\u0442\u0440\u0430\u043d\u0441\u0433\u0440\u0430\u043d",
+        "pdf_pending": "\u041a\u043e\u0434\u044b \u043f\u043e\u043b\u0443\u0447\u0435\u043d\u044b, \u0444\u043e\u0440\u043c\u0438\u0440\u0443\u0435\u043c PDF",
+        "ready": "\u0433\u043e\u0442\u043e\u0432\u043e \u043a \u043f\u0435\u0447\u0430\u0442\u0438",
+        "error": "\u043e\u0448\u0438\u0431\u043a\u0430",
+    }
+    return labels.get(str(status or "").strip(), str(status or "").strip())
+
+
+def _finalize_label_api_jobs_for_run(run_id: str) -> None:
+    with session_scope() as session:
+        jobs = session.execute(select(LabelApiJobModel).where(LabelApiJobModel.run_id == run_id)).scalars().all()
+        for job in jobs:
+            if job.pdf_file_id:
+                continue
+            _refresh_label_api_job(None, session, job)
+
+
+workflow_service.register_completion_callback(_finalize_label_api_jobs_for_run)
+
+
+def _label_api_file_url(request: Request | None, file_id: str) -> str:
+    if request is None:
+        base_url = load_config().app_base_url.strip().rstrip("/") or "http://localhost:8000"
+        return f"{base_url}/api/v1/labels/files/{file_id}.pdf"
     return _app_url_for(request, "download_label_api_pdf", file_id=file_id)
 
 
@@ -2571,10 +3178,21 @@ def _product_card_gpc_code(session: Session, wb_category: str) -> str:
     category_key = _gpc_category_key(wb_category)
     if not category_key:
         return ""
+    if not hasattr(session, "execute"):
+        return ""
     row = session.execute(
         select(GpcCategoryMappingModel).where(GpcCategoryMappingModel.wb_category_key == category_key)
     ).scalars().first()
     return row.gpc_code if row else ""
+
+
+def _product_card_gpc_mapping(session: Session, wb_category: str) -> dict[str, str]:
+    code = _product_card_gpc_code(session, wb_category)
+    if not code:
+        return {"code": "", "description": "", "label": ""}
+    description = gpc_catalog_description(session, code)
+    label = f"{code} — {description}" if description else code
+    return {"code": code, "description": description, "label": label}
 
 
 def _save_product_card_gpc_code(session: Session, wb_category: str, gpc_code: str) -> None:
@@ -2606,11 +3224,22 @@ def _gtin_request_file_name(product_card) -> str:
     return f"gtin_request_{_safe_path_token(product_card.wb_article)}_{suffix}.xlsx"
 
 
-def _product_mapping_save_message(version: int, rows_saved: int, created_gtins: list[str]) -> str:
+def _product_mapping_save_message(
+    version: int,
+    rows_saved: int,
+    created_gtins: list[str],
+    publish_forbidden_ids: list[str] | None = None,
+) -> str:
+    publish_forbidden_ids = publish_forbidden_ids or []
+    publish_note = (
+        " Автопубликация недоступна текущей роли Текшер; карточки остались в черновиках."
+        if publish_forbidden_ids
+        else ""
+    )
     if created_gtins:
         gtins = ", ".join(created_gtins)
-        return f"Карточки для GTIN: {gtins} созданы в Текшер. Мэппинг сохранен: версия {version}, строк {rows_saved}."
-    return f"Мэппинг сохранен: версия {version}, строк {rows_saved}. Новые карточки в Текшер не создавались."
+        return f"Карточки для GTIN: {gtins} созданы в Текшер.{publish_note} Мэппинг сохранен: версия {version}, строк {rows_saved}."
+    return f"Мэппинг сохранен: версия {version}, строк {rows_saved}. Новые карточки в Текшер не создавались.{publish_note}"
 
 
 def _base_context(request: Request, **extra) -> dict:

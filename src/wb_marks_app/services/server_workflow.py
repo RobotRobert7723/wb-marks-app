@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +40,10 @@ class LaunchRequest:
 class WorkflowRunService:
     def __init__(self) -> None:
         self._threads: dict[str, threading.Thread] = {}
+        self._completion_callbacks: list[Callable[[str], None]] = []
+
+    def register_completion_callback(self, callback: Callable[[str], None]) -> None:
+        self._completion_callbacks.append(callback)
 
     def create_or_resume_run(self, launch: LaunchRequest) -> str:
         with session_scope() as session:
@@ -95,6 +100,8 @@ class WorkflowRunService:
                     size=row["size"],
                     gtin=row["gtin"],
                     quantity=row["quantity"],
+                    label_template=row["label_template"],
+                    label_payload_json=json.dumps(row["label_payload"], ensure_ascii=True),
                     wb_item_name=row["name"],
                     status="pending",
                 )
@@ -230,6 +237,15 @@ class WorkflowRunService:
                 if run is not None and run.status != "cancelled":
                     run.status = "partial_failed"
                     run.error = str(exc)
+        finally:
+            self._notify_completion(run_id)
+
+    def _notify_completion(self, run_id: str) -> None:
+        for callback in tuple(self._completion_callbacks):
+            try:
+                callback(run_id)
+            except Exception:
+                continue
 
     def _run_internal(self, run_id: str) -> None:
         with session_scope() as session:
@@ -335,11 +351,13 @@ class WorkflowRunService:
                 lambda: teksher.create_mark_code_order(item.gtin, item.quantity, config),
             )
             item.document_number = self._document_number(run, item, config)
-            order_op.status = order_op.status or "created"
-            session.commit()
-            order_details = teksher.wait_for_order_ready(order_op.external_operation_id, config)
-            order_op.status = str(order_details.get("status") or "ACCEPTED")
-            order_op.end_at = str(order_details.get("endAt") or "")
+            self._sync_operation_status(order_op, teksher, config)
+            if not self._operation_is_completed(order_op):
+                order_op.status = order_op.status or "created"
+                session.commit()
+                order_details = teksher.wait_for_order_ready(order_op.external_operation_id, config)
+                order_op.status = str(order_details.get("status") or "ACCEPTED")
+                order_op.end_at = str(order_details.get("endAt") or "")
             item.status = "order_completed"
             session.commit()
 
@@ -351,11 +369,13 @@ class WorkflowRunService:
                 "marking",
                 lambda: teksher.create_marking_operation(order_op.external_operation_id, config),
             )
-            marking_op.status = marking_op.status or "created"
-            session.commit()
-            marking_details = teksher.wait_for_operation(marking_op.external_operation_id, "ACCEPTED", config)
-            marking_op.status = str(marking_details.get("status") or "ACCEPTED")
-            marking_op.end_at = str(marking_details.get("endAt") or "")
+            self._sync_operation_status(marking_op, teksher, config)
+            if not self._operation_is_completed(marking_op):
+                marking_op.status = marking_op.status or "created"
+                session.commit()
+                marking_details = teksher.wait_for_operation(marking_op.external_operation_id, "ACCEPTED", config)
+                marking_op.status = str(marking_details.get("status") or "ACCEPTED")
+                marking_op.end_at = str(marking_details.get("endAt") or "")
             item.status = "marking_completed"
             session.commit()
 
@@ -424,6 +444,30 @@ class WorkflowRunService:
             item.error = str(exc)
             session.commit()
             raise
+
+    def _sync_operation_status(
+        self,
+        operation: TeksherOperationModel,
+        teksher: TeksherService,
+        config: AppConfig,
+    ) -> None:
+        if not operation.external_operation_id:
+            return
+        try:
+            details = teksher.get_operation_details(operation.external_operation_id, config)
+        except Exception:
+            return
+        status = str(details.get("status") or "").strip()
+        if status:
+            operation.status = status
+        end_at = str(details.get("endAt") or "").strip()
+        if end_at:
+            operation.end_at = end_at
+
+    def _operation_is_completed(self, operation: TeksherOperationModel | None) -> bool:
+        if operation is None:
+            return False
+        return str(operation.status or "").strip().upper() in {"ACCEPTED", "COMPLETED", "DONE", "SUCCESS", "READY"}
 
     def _get_or_create_operation(self, session: Session, item: WorkflowRunItemModel, kind: str, factory) -> TeksherOperationModel:
         operation = self._find_operation(session, item, kind)
@@ -550,12 +594,46 @@ class WorkflowRunService:
                     "gtin": gtin,
                     "quantity": quantity,
                     "barcode": product_row.barcode,
-                    "vendor_code": product_card.wb_summary.seller_article,
+                    "vendor_code": product_row.vendor_article or product_card.wb_summary.seller_article,
                     "name": product_card.wb_summary.name,
                     "transgran": bool(row.get("transgran", True)),
+                    "label_template": self._label_template(row.get("label_template") or row.get("template")),
+                    "label_payload": self._label_payload(product_card, product_row),
                 }
             )
         return result
 
     def _row_key(self, value: str) -> str:
         return str(value or "").strip().casefold()
+
+    def _label_template(self, value: str | None) -> str:
+        key = str(value or "srad").strip().casefold()
+        aliases = {
+            "srad": "srad",
+            "combined": "srad",
+            "58x40_full": "srad",
+            "simple": "simple",
+            "58x40_simple": "simple",
+            "simple_brand": "simple_brand",
+            "simple brand": "simple_brand",
+            "simple-brand": "simple_brand",
+            "simplebrand": "simple_brand",
+            "58x40_simple_brand": "simple_brand",
+            "medium": "medium",
+            "58x40_medium": "medium",
+        }
+        return aliases.get(key, "srad")
+
+    def _label_payload(self, product_card, row) -> dict[str, str]:
+        summary = product_card.wb_summary
+        item_name = row.product_type or summary.seller_category or summary.name
+        return {
+            "item_name": item_name,
+            "vendor_code": row.vendor_article or summary.seller_article,
+            "size": row.wb_size,
+            "color": row.color or summary.color,
+            "composition": row.composition or summary.composition,
+            "barcode": row.barcode,
+            "country_of_origin": row.country or summary.country,
+            "brand": row.trademark or summary.brand,
+        }

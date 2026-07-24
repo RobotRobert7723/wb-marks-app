@@ -34,6 +34,8 @@ class AppConfig:
     teksher_refresh_token: str = ""
     teksher_username: str = ""
     teksher_password: str = ""
+    teksher_uot_name: str = ""
+    teksher_gcp: str = ""
     teksher_extension: str = "lp"
     teksher_country_id: int = 242
     teksher_transgran_country_code: str = "RU"

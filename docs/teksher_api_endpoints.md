@@ -23,8 +23,8 @@ Source: frontend bundle analysis from [teksher_index.js](/C:/Users/1/Documents/c
 - `PUT /facade/api/v1/products/{id}`
 - `PATCH /facade/api/v1/products/{id}`
 - `DELETE /facade/api/v1/products/{id}`
-- `POST /facade/api/v1/products/{id}/approve`
-- `POST /facade/api/v1/products/{id}/reject`
+- `PUT /facade/api/v1/products/{id}/approve`
+- `PUT /facade/api/v1/products/{id}/reject`
 - `POST /facade/api/v1/products/xlsx/create`
 - `POST /facade/api/v1/products/link/{id}`
 
@@ -36,7 +36,8 @@ Verified live on the `mmarket` Teksher account.
 
 - `POST /facade/api/v1/products/create` creates a product card in `DRAFT`
 - publishing/registration is a separate step:
-  - `POST /facade/api/v1/products/{id}/approve`
+  - `PUT /facade/api/v1/products/{id}/approve`
+- `PUT /approve` can return `403 FORBIDDEN` for participant accounts; this endpoint is tied to the applications/modification-tickets flow and must not block draft creation.
 
 ### Important DTO difference
 

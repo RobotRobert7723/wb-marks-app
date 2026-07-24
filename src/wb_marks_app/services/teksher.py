@@ -46,6 +46,7 @@ TEKSHER_POLL_INTERVAL_SECONDS = 7.0
 TEKSHER_KYRGYZSTAN_COUNTRY_ID = 242
 TEKSHER_SIZE_UNIT_INTERNATIONAL = "\u041c\u0415\u0416\u0414\u0423\u041d\u0410\u0420\u041e\u0414\u041d\u042b\u0419"
 TEKSHER_VENDOR_ARTICLE_UNIT = "\u0410\u0440\u0442\u0438\u043a\u0443\u043b"
+TEKSHER_DRAFT_PRODUCT_STATUSES = {"DRAFT", "CREATED", "NEW", "\u0427\u0415\u0420\u041D\u041E\u0412\u0418\u041A", "\u0421\u041E\u0417\u0414\u0410\u041D"}
 TEKSHER_CLOTHING_REGULATION = (
     "\u0422\u0420 \u0422\u0421 017/2011 "
     '"\u041e \u0411\u0415\u0417\u041e\u041f\u0410\u0421\u041d\u041e\u0421\u0422\u0418 '
@@ -121,6 +122,28 @@ class TeksherService:
     def validate_connection(self, config: AppConfig) -> None:
         self.ensure_authenticated(config)
 
+    def fetch_company_gcp_profile(self, config: AppConfig) -> dict[str, str]:
+        self.ensure_authenticated(config)
+        current_user = self._current_user(config)
+        participant = current_user.get("participant") if isinstance(current_user.get("participant"), dict) else {}
+        participant_id = self._text(
+            participant.get("id")
+            or current_user.get("participantId")
+            or current_user.get("participant_id")
+            or current_user.get("trafficParticipantId")
+        )
+
+        if participant_id and not (self._participant_name(participant) and self._participant_gcp(participant)):
+            detail = self._participant_detail(participant_id, config)
+            if detail:
+                participant = {**participant, **detail}
+
+        name = self._participant_name(participant)
+        gcp = self._participant_gcp(participant)
+        if not name or not gcp:
+            raise AppError("Teksher profile does not contain company name and GCP.")
+        return {"name": name, "gcp": gcp, "display": f"{name} ({gcp})"}
+
     def ensure_product_drafts_for_mapping(
         self,
         product_card,
@@ -141,20 +164,40 @@ class TeksherService:
     ) -> dict:
         rows = self._unique_gtin_rows(rows_payload)
         if not rows:
-            return {"draft_ids": [], "created_gtins": [], "existing_gtins": []}
+            return {
+                "draft_ids": [],
+                "created_gtins": [],
+                "existing_gtins": [],
+                "published_draft_ids": [],
+                "publish_forbidden_ids": [],
+            }
 
         self.ensure_authenticated(config)
         rows_to_create: list[dict] = []
         existing_gtins: list[str] = []
+        published_draft_ids: list[str] = []
+        publish_forbidden_ids: list[str] = []
         for row in rows:
             gtin = self._teksher_gtin(row.get("gtin"))
-            if self._product_exists_by_gtin(gtin, config):
+            existing_product = self._product_by_gtin(gtin, config)
+            if existing_product is not None:
                 existing_gtins.append(gtin)
+                published_id, publish_status = self._approve_existing_product_if_draft(existing_product, config)
+                if publish_status == "published":
+                    published_draft_ids.append(published_id)
+                elif publish_status == "forbidden":
+                    publish_forbidden_ids.append(published_id)
                 self.logger(f"Teksher product already exists for GTIN {gtin}; draft creation skipped.")
                 continue
             rows_to_create.append(row)
         if not rows_to_create:
-            return {"draft_ids": [], "created_gtins": [], "existing_gtins": existing_gtins}
+            return {
+                "draft_ids": [],
+                "created_gtins": [],
+                "existing_gtins": existing_gtins,
+                "published_draft_ids": published_draft_ids,
+                "publish_forbidden_ids": publish_forbidden_ids,
+            }
 
         manufacturer_info = self._manufacturer_create_fields(config)
         draft_ids: list[str] = []
@@ -162,16 +205,37 @@ class TeksherService:
         for row in self.rows_with_product_draft_fields(rows_to_create, draft_fields):
             payload = self._product_draft_payload(product_card, row, manufacturer_info, config)
             try:
-                draft_ids.append(self._create_product_draft(payload, config))
-                created_gtins.append(self._text(payload.get("gtin")))
+                draft_id = self._create_product_draft(payload, config)
+                gtin = self._text(payload.get("gtin"))
+                product_id = draft_id or self._product_id_by_gtin(gtin, config)
+                if not product_id:
+                    raise AppError(f"Teksher did not return product id for GTIN {gtin}; publication cannot be completed.")
+                publish_status = self._approve_product_draft(product_id, config)
+                draft_ids.append(draft_id)
+                if publish_status == "published":
+                    published_draft_ids.append(product_id)
+                elif publish_status == "forbidden":
+                    publish_forbidden_ids.append(product_id)
+                created_gtins.append(gtin)
             except AppError as exc:
                 if self._is_existing_product_error(exc):
                     gtin = self._text(payload.get("gtin"))
                     existing_gtins.append(gtin)
+                    published_id, publish_status = self._approve_existing_product_by_gtin_if_draft(gtin, config)
+                    if publish_status == "published":
+                        published_draft_ids.append(published_id)
+                    elif publish_status == "forbidden":
+                        publish_forbidden_ids.append(published_id)
                     self.logger(f"Teksher product already exists for GTIN {gtin}; draft creation skipped.")
                     continue
                 raise
-        return {"draft_ids": draft_ids, "created_gtins": created_gtins, "existing_gtins": existing_gtins}
+        return {
+            "draft_ids": draft_ids,
+            "created_gtins": created_gtins,
+            "existing_gtins": existing_gtins,
+            "published_draft_ids": published_draft_ids,
+            "publish_forbidden_ids": publish_forbidden_ids,
+        }
 
     def product_draft_preview_for_mapping(
         self,
@@ -276,6 +340,10 @@ class TeksherService:
         if not order_id:
             raise AppError(f"Teksher did not return an order id for GTIN {gtin}.")
         return order_id
+
+    def ensure_gtin_ready_for_mark_order(self, gtin: str, config: AppConfig) -> None:
+        self.ensure_authenticated(config)
+        self._ensure_gtin_ready_for_mark_order(gtin, config)
 
     def wait_for_order_ready(self, order_id: str, config: AppConfig) -> dict:
         self._wait_for_order_ready(order_id, config)
@@ -408,6 +476,56 @@ class TeksherService:
                     return True
         return False
 
+    def _current_user(self, config: AppConfig) -> dict:
+        response = self.session.get(
+            self._url(config, "/facade/api/v1/users/getCurrentUser"),
+            headers=self._headers(config),
+            timeout=30,
+        )
+        self._raise_for_status(response)
+        payload = self._json(response)
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        if not isinstance(data, dict):
+            raise AppError(f"Unexpected Teksher current user response: {payload!r}")
+        return data
+
+    def _participant_detail(self, participant_id: str, config: AppConfig) -> dict:
+        response = self.session.get(
+            self._url(config, f"/facade/api/v1/participants/{quote(participant_id)}"),
+            headers=self._headers(config),
+            timeout=30,
+        )
+        self._raise_for_status(response)
+        payload = self._json(response)
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        if not isinstance(data, dict):
+            return {}
+        return data
+
+    def _participant_name(self, participant: dict) -> str:
+        return self._text(
+            participant.get("fullName")
+            or participant.get("full_name")
+            or participant.get("name")
+            or participant.get("title")
+        )
+
+    def _participant_gcp(self, participant: dict) -> str:
+        for key in ("gcp", "GCP", "gcpCode", "prefixGcp"):
+            value = self._digits(participant.get(key))
+            if value:
+                return value
+
+        identifiers = self._coerce_dict_list(
+            participant.get("identifiers") or participant.get("participantIdentifiers")
+        )
+        final_identifiers = [item for item in identifiers if item.get("isFinal") is True]
+        for item in final_identifiers + identifiers:
+            value = self._digits(item.get("gcp") or item.get("GCP") or item.get("gcpCode"))
+            if value:
+                return value
+        return ""
+
     def _product_by_gtin(self, gtin: str, config: AppConfig) -> dict | None:
         normalized_gtin = self._teksher_gtin(gtin)
         original_gtin = self._text(gtin)
@@ -442,6 +560,8 @@ class TeksherService:
             if detail is not None:
                 if not self._text(detail.get("gtin")):
                     detail["gtin"] = normalized_gtin
+                if not self._text(detail.get("status")) and self._text(product.get("status")):
+                    detail["status"] = product.get("status")
                 return detail
         return product
 
@@ -659,6 +779,42 @@ class TeksherService:
         if not draft_id:
             self.logger(f"Teksher product draft create response did not include id: {data}")
         return draft_id
+
+    def _approve_product_draft(self, product_id: str, config: AppConfig) -> str:
+        response = self.session.put(
+            self._url(config, f"/facade/api/v1/products/{quote(product_id)}/approve"),
+            headers=self._headers(config),
+            timeout=30,
+        )
+        if response.status_code == 403:
+            self.logger(f"Teksher product {product_id} publication is forbidden for the current account.")
+            return "forbidden"
+        self._raise_for_status(response)
+        return "published"
+
+    def _approve_existing_product_by_gtin_if_draft(self, gtin: str, config: AppConfig) -> tuple[str, str]:
+        product = self._product_by_gtin(gtin, config)
+        if product is None:
+            return "", ""
+        return self._approve_existing_product_if_draft(product, config)
+
+    def _approve_existing_product_if_draft(self, product: dict, config: AppConfig) -> tuple[str, str]:
+        if not self._is_draft_product(product):
+            return "", ""
+        product_id = self._product_id_from_response({"data": product})
+        if not product_id:
+            return "", ""
+        return product_id, self._approve_product_draft(product_id, config)
+
+    def _is_draft_product(self, product: dict) -> bool:
+        status = self._text(product.get("status") or product.get("state") or product.get("productStatus")).upper()
+        return status in TEKSHER_DRAFT_PRODUCT_STATUSES
+
+    def _product_id_by_gtin(self, gtin: str, config: AppConfig) -> str:
+        product = self._product_by_gtin(gtin, config)
+        if product is None:
+            return ""
+        return self._product_id_from_response({"data": product})
 
     def _product_draft_payload(
         self,
@@ -1302,6 +1458,9 @@ class TeksherService:
         grouped_tasks: dict[str, list[MarkingTask]],
         config: AppConfig,
     ) -> dict[str, str]:
+        for gtin in sorted(grouped_tasks):
+            self._ensure_gtin_ready_for_mark_order(gtin, config)
+
         items = []
         for gtin, gtin_tasks in sorted(grouped_tasks.items()):
             items.append(
@@ -1329,6 +1488,24 @@ class TeksherService:
         if not order_ids:
             raise AppError(f"Teksher did not return order ids: {data}")
         return {str(order_id): str(gtin) for order_id, gtin in order_ids.items()}
+
+    def _ensure_gtin_ready_for_mark_order(self, gtin: str, config: AppConfig) -> None:
+        normalized_gtin = self._teksher_gtin(gtin)
+        if not normalized_gtin:
+            return
+        product = self._product_by_gtin(normalized_gtin, config)
+        if product is None or not self._is_draft_product(product):
+            return
+
+        raise AppError(
+            "\u041a\u0430\u0440\u0442\u043e\u0447\u043a\u0430 GTIN "
+            f"{normalized_gtin} \u0432 \u0422\u0435\u043a\u0448\u0435\u0440 "
+            "\u043d\u0430\u0445\u043e\u0434\u0438\u0442\u0441\u044f \u0432 \u0441\u0442\u0430\u0442\u0443\u0441\u0435 "
+            "\u0447\u0435\u0440\u043d\u043e\u0432\u0438\u043a (DRAFT). "
+            "\u041e\u043f\u0443\u0431\u043b\u0438\u043a\u0443\u0439\u0442\u0435 "
+            "\u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0443 \u043f\u0435\u0440\u0435\u0434 "
+            "\u043f\u0435\u0447\u0430\u0442\u044c\u044e \u044d\u0442\u0438\u043a\u0435\u0442\u043e\u043a."
+        )
 
     def _authenticate(self, config: AppConfig) -> None:
         if not config.teksher_username or not config.teksher_password:

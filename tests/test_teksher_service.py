@@ -7,6 +7,7 @@ from datetime import datetime
 import unittest
 from urllib.parse import parse_qs, urlparse
 
+from wb_marks_app.exceptions import AppError
 from wb_marks_app.models import AppConfig, MarkingTask
 from wb_marks_app.services.product_cards import ProductCardMappingRow, ProductCardTemplate, WbProductSummary
 from wb_marks_app.services.teksher import (
@@ -112,8 +113,24 @@ class FakeSession:
             return FakeResponse(201, json_data="transgran-op-1", text="transgran-op-1")
         raise AssertionError(f"Unexpected POST {url}")
 
+    def put(self, url, headers=None, json=None, timeout=None):
+        self.calls.append(("PUT", url, json))
+        raise AssertionError(f"Unexpected PUT {url}")
+
     def get(self, url, headers=None, timeout=None):
         self.calls.append(("GET", url, None))
+        if url.endswith("/facade/api/v1/users/getCurrentUser"):
+            return FakeResponse(
+                200,
+                json_data={
+                    "id": 4884250,
+                    "participant": {
+                        "id": 4884247,
+                        "fullName": 'ОсОО "ЭмМаркет КейДжи"',
+                        "gcp": "470006325",
+                    },
+                },
+            )
         if url.endswith("/facade/api/v1/operations/order-op-1"):
             self.ready_checks += 1
             status = "PROGRESS" if self.ready_checks == 1 else "ACCEPTED"
@@ -142,6 +159,8 @@ class FakeSession:
             return FakeResponse(200, json_data={"status": "200", "message": None, "data": True})
         if url.endswith("/facade/api/v1/marking_codes/csv?operationId=marking-op-1"):
             return FakeResponse(200, content=FAKE_CODES_CSV.encode("utf-8"))
+        if "/facade/api/v1/products?gtin=" in url:
+            return FakeResponse(200, json_data={"data": []})
         raise AssertionError(f"Unexpected GET {url}")
 
 
@@ -186,13 +205,17 @@ class FakeSessionProducts(FakeSession):
         existing_gtins: set[str] | None = None,
         empty_create_response: bool = False,
         no_content_lookup: bool = False,
+        existing_status: str = "DRAFT",
     ) -> None:
         super().__init__()
         self.existing = existing
         self.existing_gtins = existing_gtins or set()
         self.empty_create_response = empty_create_response
         self.no_content_lookup = no_content_lookup
+        self.existing_status = existing_status
+        self.approve_forbidden = False
         self.created_payloads: list[dict] = []
+        self.approved_product_ids: list[str] = []
 
     def get(self, url, headers=None, timeout=None):
         self.calls.append(("GET", url, None))
@@ -200,7 +223,8 @@ class FakeSessionProducts(FakeSession):
             query_gtin = parse_qs(urlparse(url).query).get("gtin", [""])[0]
             if self.no_content_lookup:
                 return FakeResponse(204, text="", json_error=True)
-            if self.existing or query_gtin in self.existing_gtins:
+            created_gtins = {str(payload.get("gtin") or "") for payload in self.created_payloads}
+            if self.existing or query_gtin in self.existing_gtins or query_gtin in created_gtins:
                 return FakeResponse(
                     200,
                     json_data={
@@ -208,7 +232,7 @@ class FakeSessionProducts(FakeSession):
                             {
                                 "id": "product-1",
                                 "gtin": query_gtin or "04709055620626",
-                                "status": "DRAFT",
+                                "status": self.existing_status,
                             }
                         ]
                     },
@@ -221,6 +245,7 @@ class FakeSessionProducts(FakeSession):
                     "data": {
                         "id": "product-1",
                         "gtin": "04709055620626",
+                        "status": self.existing_status,
                         "fullName": "Костюм спортивный",
                         "trademark": "ErLine",
                         "tnved": {"id": 999, "code": "6112120000"},
@@ -303,13 +328,27 @@ class FakeSessionProducts(FakeSession):
         return super().get(url, headers=headers, timeout=timeout)
 
     def post(self, url, headers=None, json=None, files=None, timeout=None):
-        self.calls.append(("POST", url, json if json is not None else files))
         if url.endswith("/facade/api/v1/products/create"):
+            self.calls.append(("POST", url, json if json is not None else files))
             self.created_payloads.append(json or {})
             if self.empty_create_response:
                 return FakeResponse(201, text="", json_error=True)
             return FakeResponse(201, json_data={"data": {"id": "draft-1", "status": "DRAFT"}})
         return super().post(url, headers=headers, json=json, files=files, timeout=timeout)
+
+    def put(self, url, headers=None, json=None, timeout=None):
+        self.calls.append(("PUT", url, json))
+        if "/facade/api/v1/products/" in url and url.endswith("/approve"):
+            product_id = url.rstrip("/").split("/")[-2]
+            if self.approve_forbidden:
+                return FakeResponse(
+                    403,
+                    json_data={"status": "FORBIDDEN", "message": "Доступ запрещен", "data": None},
+                    text='{"status":"FORBIDDEN","message":"Доступ запрещен","data":null}',
+                )
+            self.approved_product_ids.append(product_id)
+            return FakeResponse(200, json_data={"data": {"id": product_id, "status": "APPROVED"}})
+        return super().put(url, headers=headers, json=json, timeout=timeout)
 
 
 def _future_token() -> str:
@@ -468,6 +507,21 @@ class TeksherServiceTests(unittest.TestCase):
             any(call[0] == "POST" and call[1].endswith("/facade/oauth/login") for call in session.calls)
         )
 
+    def test_fetch_company_gcp_profile_uses_current_user_participant(self) -> None:
+        session = FakeSession()
+        service = TeksherService(
+            browser=FakeBrowser(),
+            session=session,
+            sleep=lambda _: None,
+        )
+        config = AppConfig(teksher_api_token=_future_token())
+
+        profile = service.fetch_company_gcp_profile(config)
+
+        self.assertEqual('ОсОО "ЭмМаркет КейДжи"', profile["name"])
+        self.assertEqual("470006325", profile["gcp"])
+        self.assertEqual('ОсОО "ЭмМаркет КейДжи" (470006325)', profile["display"])
+
     def test_run_transgran_cycle_creates_operation(self) -> None:
         service = TeksherService(
             browser=FakeBrowser(),
@@ -580,7 +634,7 @@ class TeksherServiceTests(unittest.TestCase):
 
         service._wait_for_order_ready("order-op-1", config)
 
-    def test_ensure_product_drafts_for_mapping_skips_existing_gtin(self) -> None:
+    def test_ensure_product_drafts_for_mapping_publishes_existing_draft_gtin(self) -> None:
         session = FakeSessionProducts(existing=True)
         service = TeksherService(browser=FakeBrowser(), session=session, sleep=lambda _: None)
         config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
@@ -593,6 +647,56 @@ class TeksherServiceTests(unittest.TestCase):
 
         self.assertEqual([], draft_ids)
         self.assertEqual([], session.created_payloads)
+        self.assertEqual(["product-1"], session.approved_product_ids)
+
+    def test_ensure_product_drafts_for_mapping_skips_published_existing_gtin(self) -> None:
+        session = FakeSessionProducts(existing=True, existing_status="APPROVED")
+        service = TeksherService(browser=FakeBrowser(), session=session, sleep=lambda _: None)
+        config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
+
+        draft_ids = service.ensure_product_drafts_for_mapping(
+            _product_card(),
+            [{"gtin": "04709055620626", "wb_size": "38"}],
+            config,
+        )
+
+        self.assertEqual([], draft_ids)
+        self.assertEqual([], session.created_payloads)
+        self.assertEqual([], session.approved_product_ids)
+
+    def test_create_mark_code_order_stops_on_existing_draft_gtin(self) -> None:
+        session = FakeSessionProducts(existing=True)
+        service = TeksherService(browser=FakeBrowser(), session=session, sleep=lambda _: None)
+        config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
+
+        with self.assertRaises(AppError) as raised:
+            service.create_mark_code_order("04709055620626", 2, config)
+
+        self.assertIn("DRAFT", str(raised.exception))
+        self.assertIn("Опубликуйте карточку", str(raised.exception))
+        self.assertEqual([], session.approved_product_ids)
+        order_calls = [
+            call
+            for call in session.calls
+            if call[0] == "POST" and call[1].endswith("/facade/order/api/v1/operations/multi")
+        ]
+        self.assertEqual([], order_calls)
+
+    def test_create_mark_code_order_allows_published_existing_gtin(self) -> None:
+        session = FakeSessionProducts(existing=True, existing_status="APPROVED")
+        service = TeksherService(browser=FakeBrowser(), session=session, sleep=lambda _: None)
+        config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
+
+        order_id = service.create_mark_code_order("04709055620626", 2, config)
+
+        self.assertEqual("order-op-1", order_id)
+        self.assertEqual([], session.approved_product_ids)
+        order_calls = [
+            call
+            for call in session.calls
+            if call[0] == "POST" and call[1].endswith("/facade/order/api/v1/operations/multi")
+        ]
+        self.assertEqual(1, len(order_calls))
 
     def test_ensure_product_drafts_for_mapping_creates_only_missing_gtins(self) -> None:
         session = FakeSessionProducts(existing_gtins={"04709055620626"})
@@ -631,6 +735,7 @@ class TeksherServiceTests(unittest.TestCase):
         self.assertEqual(["draft-1"], draft_ids)
         self.assertEqual(1, len(session.created_payloads))
         self.assertEqual("04709055620633", session.created_payloads[0]["gtin"])
+        self.assertEqual(["product-1", "draft-1"], session.approved_product_ids)
 
     def test_product_draft_preview_reports_existing_and_missing_gtins(self) -> None:
         session = FakeSessionProducts(existing_gtins={"04709055620664"})
@@ -675,7 +780,7 @@ class TeksherServiceTests(unittest.TestCase):
         self.assertIn({"value": "КОСТЮМ СПОРТИВНЫЙ", "label": ""}, preview["dictionaries"]["product_type"])
         self.assertIn({"value": "МЕЖДУНАРОДНЫЙ", "label": ""}, preview["dictionaries"]["size_unit"])
 
-    def test_ensure_product_drafts_for_mapping_creates_draft_without_approve(self) -> None:
+    def test_ensure_product_drafts_for_mapping_creates_and_approves_draft(self) -> None:
         session = FakeSessionProducts(existing=False)
         service = TeksherService(browser=FakeBrowser(), session=session, sleep=lambda _: None)
         config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
@@ -721,7 +826,38 @@ class TeksherServiceTests(unittest.TestCase):
         self.assertEqual("cv_nk_white_smr", attributes["13914"]["value"])
         self.assertEqual("Артикул", attributes["13914"]["unitCode"])
         self.assertEqual(TEKSHER_CLOTHING_REGULATION, attributes["13836"]["value"])
-        self.assertFalse(any(call[0] == "POST" and call[1].endswith("/approve") for call in session.calls))
+        self.assertEqual(["draft-1"], session.approved_product_ids)
+        self.assertTrue(any(call[0] == "PUT" and call[1].endswith("/products/draft-1/approve") for call in session.calls))
+
+    def test_ensure_product_drafts_for_mapping_keeps_draft_when_approve_forbidden(self) -> None:
+        session = FakeSessionProducts(existing=False)
+        session.approve_forbidden = True
+        service = TeksherService(browser=FakeBrowser(), session=session, sleep=lambda _: None)
+        config = AppConfig(teksher_api_token=_future_token(), step_timeout_seconds=30)
+
+        result = service.ensure_product_drafts_result_for_mapping(
+            _product_card(),
+            [
+                {
+                    "wb_size": "38",
+                    "teksher_size": "38 РњР•Р–Р”РЈРќРђР РћР”РќР«Р™",
+                    "product_type": "РљРћРЎРўР®Рњ РЎРџРћР РўРР’РќР«Р™",
+                    "gtin": "4709055620626",
+                    "tnved": "6112120000",
+                    "country": "КЫРГЫЗСТАН",
+                    "color": "Р±РµР»С‹Р№",
+                    "composition": "РїРѕР»РёСЌСЃС‚РµСЂ 100%",
+                    "trademark": "ErLine",
+                }
+            ],
+            config,
+        )
+
+        self.assertEqual(["draft-1"], result["draft_ids"])
+        self.assertEqual(["04709055620626"], result["created_gtins"])
+        self.assertEqual([], result["published_draft_ids"])
+        self.assertEqual(["draft-1"], result["publish_forbidden_ids"])
+        self.assertEqual([], session.approved_product_ids)
 
     def test_ensure_product_drafts_allows_empty_success_create_response(self) -> None:
         session = FakeSessionProducts(existing=False, empty_create_response=True)

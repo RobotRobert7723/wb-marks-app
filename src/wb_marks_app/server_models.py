@@ -34,6 +34,8 @@ class AppSettingsModel(Base):
     wb_api_base_url: Mapped[str] = mapped_column(String(255), default="https://supplies-api.wildberries.ru")
     teksher_username: Mapped[str] = mapped_column(String(255), default="")
     teksher_password: Mapped[str] = mapped_column(Text, default="")
+    teksher_uot_name: Mapped[str] = mapped_column(String(255), default="")
+    teksher_gcp: Mapped[str] = mapped_column(String(32), default="")
     teksher_transgran_recipient_name: Mapped[str] = mapped_column(String(255), default="")
     teksher_transgran_recipient_inn: Mapped[str] = mapped_column(String(32), default="")
     teksher_transgran_recipient_kpp: Mapped[str] = mapped_column(String(32), default="")
@@ -105,6 +107,8 @@ class WorkflowRunItemModel(Base):
     size: Mapped[str] = mapped_column(String(64), index=True)
     gtin: Mapped[str] = mapped_column(String(64))
     quantity: Mapped[int] = mapped_column(Integer)
+    label_template: Mapped[str] = mapped_column(String(32), default="srad")
+    label_payload_json: Mapped[str] = mapped_column(Text, default="{}")
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     error: Mapped[str] = mapped_column(Text, default="")
     wb_item_name: Mapped[str] = mapped_column(Text, default="")
@@ -206,6 +210,17 @@ class GpcCategoryMappingModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, onupdate=_utc_now)
 
 
+class GpcCatalogModel(Base):
+    __tablename__ = "gpc_catalog"
+    __table_args__ = {"schema": SCHEMA} if SCHEMA else {}
+
+    code: Mapped[str] = mapped_column(String(8), primary_key=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    source_file: Mapped[str] = mapped_column(String(255), default="gpc_catalog.xlsx")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, onupdate=_utc_now)
+
+
 class MarkCodeModel(Base):
     __tablename__ = "mark_codes"
     __table_args__ = (
@@ -246,6 +261,7 @@ class LabelPrintJobModel(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey(_fk("users.id"), ondelete="SET NULL"), index=True, nullable=True)
+    run_item_id: Mapped[str | None] = mapped_column(String(36), ForeignKey(_fk("workflow_run_items.id"), ondelete="SET NULL"), index=True, nullable=True)
     wb_article: Mapped[str] = mapped_column(String(64), index=True)
     wb_size: Mapped[str] = mapped_column(String(64), index=True, default="")
     gtin: Mapped[str] = mapped_column(String(64), default="")

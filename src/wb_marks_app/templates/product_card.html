@@ -33,31 +33,18 @@
   .source-chip.template { background: #eaf3ff; color: #1c5794; }
   .product-actions { display: flex; flex-wrap: wrap; gap: 12px; }
   .product-actions .button, .product-actions button { min-width: 145px; padding: 9px 12px; text-align: center; }
-  .label-template-control {
-    align-items: center;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin: 12px 0;
+  .gpc-current-info {
+    background: #f8fafc;
+    border: 1px solid #dfe3eb;
+    border-radius: 8px;
+    color: #344054;
+    display: inline-flex;
+    font-size: 13px;
+    font-weight: 700;
+    margin: 0 0 12px;
+    padding: 8px 10px;
   }
-  .label-template-control label { color: #344054; font-weight: 700; }
-  .label-template-control select {
-    border: 1px solid #cfd4dc;
-    border-radius: 6px;
-    color: #1d2939;
-    font: inherit;
-    min-height: 38px;
-    padding: 7px 10px;
-    width: 160px;
-  }
-  .print-actions {
-    align-items: center;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 14px;
-  }
-  .print-actions .label-template-control { margin: 0; }
+  .gpc-current-info[hidden] { display: none; }
   .upload-status { font-weight: 700; margin-top: 12px; }
   .upload-status.error { color: #b42318; }
   .upload-status.success { color: #3f6212; }
@@ -91,8 +78,6 @@
     white-space: nowrap;
   }
   .mapping-table th { color: white; font-weight: 700; }
-  .mapping-table .ready-print-head { text-align: left; }
-  .mapping-table .ready-print-cell { text-align: left; }
   .mapping-table th:last-child, .mapping-table td:last-child { border-right: 0; }
   .mapping-table .api-head { background: #838383; }
   .mapping-table .teksher-head { background: #97b958; }
@@ -106,7 +91,7 @@
   .wb-summary-table { min-width: 1210px; width: 100%; }
   .wb-teksher-table { min-width: 1360px; width: 100%; }
   .print-table { min-width: 470px; width: 100%; }
-  .order-table { min-width: 620px; width: 100%; }
+  .order-table { min-width: 860px; width: 100%; }
   .print-table th,
   .print-table td,
   .order-table th,
@@ -115,16 +100,19 @@
     padding-bottom: 4px;
     padding-top: 4px;
   }
-  .order-count-input {
+  .order-count-input,
+  .order-template-select {
     border: 1px solid #cfd4dc;
     border-radius: 6px;
     font: inherit;
-    height: 22px;
-    min-height: 22px;
-    padding: 2px 8px;
-    text-align: right;
+    height: 30px;
+    min-height: 30px;
+    padding: 4px 8px;
     width: 100%;
   }
+  .order-count-input { text-align: right; }
+  .order-template-cell { min-width: 150px; }
+  .order-template-select { min-width: 145px; }
   .transgran-cell { text-align: center; }
   .transgran-checkbox {
     height: 16px;
@@ -197,7 +185,7 @@
   }
   .section-title { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; }
   .section-title h2 { margin: 0; }
-  .split-actions { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; }
+  .split-actions { display: grid; gap: 16px; grid-template-columns: 1fr; min-width: 0; }
   .split-actions > .card { min-width: 0; }
   .empty-cell { color: #98a2b3; }
   .draft-modal[hidden] { display: none; }
@@ -283,6 +271,41 @@
     padding: 8px 10px;
     width: 100%;
   }
+  .gpc-modal-panel { max-width: 720px; }
+  .gpc-search-area {
+    display: grid;
+    gap: 10px;
+  }
+  .gpc-search-area label {
+    color: #344054;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .gpc-search-area input,
+  .gpc-search-area select {
+    border: 1px solid #cfd4dc;
+    border-radius: 6px;
+    color: #1d2939;
+    font: inherit;
+    padding: 8px 10px;
+    width: 100%;
+  }
+  .gpc-search-area select { min-height: 220px; }
+  .gpc-current-modal {
+    background: #f8fafc;
+    border: 1px solid #dfe3eb;
+    border-radius: 8px;
+    color: #344054;
+    font-weight: 700;
+    margin: 0 0 14px;
+    padding: 10px 12px;
+  }
+  .gpc-select-status {
+    color: #475467;
+    font-weight: 700;
+    margin: 10px 0 0;
+  }
+  .gpc-select-status.error { color: #b42318; }
   .draft-modal-actions {
     display: flex;
     gap: 10px;
@@ -310,6 +333,8 @@
   data-wb-brand="{{ product_card.wb_summary.brand }}"
   data-has-mapping="{{ 'true' if product_card.has_teksher_mapping else 'false' }}"
   data-mapping-version="{{ product_card.mapping_version }}"
+  data-current-gpc-code="{{ gpc_mapping.code }}"
+  data-current-gpc-label="{{ gpc_mapping.label }}"
 >
   <div class="card">
     <div class="product-card-header">
@@ -329,6 +354,13 @@
         </div>
         <p class="muted">Адрес страницы содержит артикул WB: <code>/product-cards/{{ product_card.wb_article }}</code></p>
         <p class="muted">{{ product_card.api_status }}</p>
+        <div
+          id="gpc-current-info"
+          class="gpc-current-info"
+          {% if not gpc_mapping.code %}hidden{% endif %}
+        >
+          Код GPC: <span id="gpc-current-label">{{ gpc_mapping.label }}</span>
+        </div>
         <div class="product-actions">
           <button type="button" id="gtin-upload-button">Загрузить GTIN</button>
           <input id="gtin-upload-input" type="file" accept=".xlsx,.xlsm" hidden />
@@ -346,6 +378,27 @@
           <button type="button" id="mapping-save-no" class="secondary">Нет</button>
         </div>
         <div id="gtin-upload-status" class="upload-status" role="status" aria-live="polite"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="gpc-select-modal" class="draft-modal" hidden role="dialog" aria-modal="true" aria-labelledby="gpc-select-title">
+    <div class="draft-modal-panel gpc-modal-panel">
+      <div class="draft-modal-head">
+        <h2 id="gpc-select-title">Выбор кода GPC</h2>
+        <button type="button" id="gpc-select-close" class="draft-modal-close" aria-label="Закрыть">×</button>
+      </div>
+      <p id="gpc-select-message" class="draft-preview-message"></p>
+      <div id="gpc-current-modal" class="gpc-current-modal"></div>
+      <div class="gpc-search-area">
+        <label for="gpc-search-input">Поиск по коду или описанию</label>
+        <input id="gpc-search-input" type="search" placeholder="Например: 10001335 или брюки" autocomplete="off" />
+        <select id="gpc-select-list" size="8" aria-label="Справочник GPC"></select>
+      </div>
+      <p id="gpc-select-status" class="gpc-select-status"></p>
+      <div class="draft-modal-actions">
+        <button type="button" id="gpc-select-cancel" class="secondary">Отмена</button>
+        <button type="button" id="gpc-select-confirm">Сформировать заявку</button>
       </div>
     </div>
   </div>
@@ -490,11 +543,12 @@
       <div class="table-scroll compact-scroll">
         <table class="mapping-table order-table">
           <colgroup>
+            <col style="width: 8%;" />
+            <col style="width: 22%;" />
             <col style="width: 10%;" />
-            <col style="width: 25%;" />
-            <col style="width: 15%;" />
+            <col style="width: 13%;" />
             <col style="width: 20%;" />
-            <col style="width: 30%;" />
+            <col style="width: 27%;" />
           </colgroup>
           <thead>
             <tr>
@@ -502,6 +556,7 @@
               <th class="template-head">GTIN</th>
               <th class="template-head">Трансгран</th>
               <th class="template-head">Заказать</th>
+              <th class="template-head">Шаблон печати</th>
               <th class="template-head">Статус</th>
             </tr>
           </thead>
@@ -528,6 +583,14 @@
                   aria-label="Заказать размер {{ row.wb_size }}"
                 />
               </td>
+              <td class="template-cell order-template-cell">
+                <select class="order-template-select" aria-label="Шаблон печати размер {{ row.wb_size }}">
+                  <option value="srad" selected>SRad</option>
+                  <option value="simple">Simple</option>
+                  <option value="simple_brand">SIMPLE Brand</option>
+                  <option value="medium">Medium</option>
+                </select>
+              </td>
               <td class="template-cell order-status-cell" data-order-status></td>
             </tr>
             {% endfor %}
@@ -540,54 +603,6 @@
       </div>
       <div id="mark-order-status" class="order-run-status" role="status" aria-live="polite"></div>
     </div>
-
-    <div class="card">
-      <div class="section-title">
-        <h2>Печать этикеток</h2>
-      </div>
-      <div class="table-scroll compact-scroll">
-        <table class="mapping-table print-table">
-          <colgroup>
-            <col style="width: 32%;" />
-            <col style="width: 14%;" />
-            <col style="width: 18%;" />
-            <col style="width: 36%;" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th class="template-head">Баркоды</th>
-              <th class="template-head">Размер</th>
-              <th class="template-head">Рос. размер</th>
-              <th class="template-head ready-print-head">Готовы к печати</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for row in product_card.rows %}
-            <tr data-print-row-size="{{ row.wb_size }}">
-              <td class="template-cell">{{ row.barcode }}</td>
-              <td class="template-cell">{{ row.wb_size }}</td>
-              <td class="template-cell">{{ row.ru_size }}</td>
-              <td class="template-cell ready-print-cell" data-ready-print>{{ row.print_count }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      <div class="print-actions">
-        <button type="button" class="secondary" id="print-labels-button">Напечатать этикетки</button>
-        <button type="button" class="secondary" id="print-history-button">История печати</button>
-        <div class="label-template-control">
-          <label for="label-template-select">Шаблон печати</label>
-          <select id="label-template-select">
-            <option value="srad" selected>SRad</option>
-            <option value="simple">Simple</option>
-            <option value="simple_brand">SIMPLE Brand</option>
-            <option value="medium">Medium</option>
-          </select>
-        </div>
-      </div>
-      <div id="print-label-status" class="order-run-status" role="status" aria-live="polite"></div>
-    </div>
   </div>
 
   <div id="order-history-panel" class="card order-history-panel" hidden>
@@ -597,18 +612,18 @@
     <div id="order-history-message" class="order-run-status" role="status" aria-live="polite"></div>
     <div class="table-scroll">
       <table class="mapping-table order-history-table">
-        <colgroup>
-          <col style="width: 10%;" />
-          <col style="width: 5%;" />
-          <col style="width: 11%;" />
-          <col style="width: 5%;" />
-          <col style="width: 12%;" />
-          <col style="width: 14%;" />
-          <col style="width: 14%;" />
-          <col style="width: 14%;" />
-          <col style="width: 8%;" />
-          <col style="width: 8%;" />
-        </colgroup>
+          <colgroup>
+            <col style="width: 10%;" />
+            <col style="width: 5%;" />
+            <col style="width: 11%;" />
+            <col style="width: 5%;" />
+            <col style="width: 11%;" />
+            <col style="width: 13%;" />
+            <col style="width: 13%;" />
+            <col style="width: 12%;" />
+            <col style="width: 8%;" />
+            <col style="width: 12%;" />
+          </colgroup>
         <thead>
           <tr>
             <th class="template-head">Дата запуска</th>
@@ -630,7 +645,7 @@
 
   <div id="print-history-panel" class="card order-history-panel print-history-panel" hidden>
     <div class="order-history-title">
-      <h3>История печати</h3>
+      <h3 id="print-history-title">История печати</h3>
     </div>
     <div id="print-history-message" class="order-run-status" role="status" aria-live="polite"></div>
     <div class="table-scroll">
@@ -683,17 +698,25 @@
   const draftClose = document.getElementById('draft-preview-close');
   const draftCancel = document.getElementById('draft-preview-cancel');
   const draftSave = document.getElementById('draft-preview-save');
+  const gpcCurrentInfo = document.getElementById('gpc-current-info');
+  const gpcCurrentLabel = document.getElementById('gpc-current-label');
+  const gpcModal = document.getElementById('gpc-select-modal');
+  const gpcMessage = document.getElementById('gpc-select-message');
+  const gpcCurrentModal = document.getElementById('gpc-current-modal');
+  const gpcSearchInput = document.getElementById('gpc-search-input');
+  const gpcSelectList = document.getElementById('gpc-select-list');
+  const gpcSelectStatus = document.getElementById('gpc-select-status');
+  const gpcSelectClose = document.getElementById('gpc-select-close');
+  const gpcSelectCancel = document.getElementById('gpc-select-cancel');
+  const gpcSelectConfirm = document.getElementById('gpc-select-confirm');
   const markOrderButton = document.getElementById('mark-order-button');
   const markOrderStatus = document.getElementById('mark-order-status');
   const orderHistoryButton = document.getElementById('order-history-button');
   const orderHistoryPanel = document.getElementById('order-history-panel');
   const orderHistoryBody = document.getElementById('order-history-body');
   const orderHistoryMessage = document.getElementById('order-history-message');
-  const labelTemplateSelect = document.getElementById('label-template-select');
-  const printLabelsButton = document.getElementById('print-labels-button');
-  const printLabelStatus = document.getElementById('print-label-status');
-  const printHistoryButton = document.getElementById('print-history-button');
   const printHistoryPanel = document.getElementById('print-history-panel');
+  const printHistoryTitle = document.getElementById('print-history-title');
   const printHistoryBody = document.getElementById('print-history-body');
   const printHistoryMessage = document.getElementById('print-history-message');
   if (!page || !uploadButton || !input || !saveButton || !status) return;
@@ -701,6 +724,12 @@
   let hasUnsavedGtin = false;
   let currentMarkOrderRunId = '';
   let markOrderPollTimer = null;
+  let activePrintHistoryItemId = '';
+  let selectedGpc = {
+    code: page.dataset.currentGpcCode || '',
+    label: page.dataset.currentGpcLabel || '',
+  };
+  let gpcSearchTimer = null;
   const draftFieldDefinitions = [
     { key: 'full_name', label: 'Полное наименование товара', full: true },
     { key: 'tnved', label: 'Код ТН ВЭД', dictionary: true },
@@ -725,7 +754,7 @@
     openUploadDialog();
   });
   if (gtinRequestButton) {
-    gtinRequestButton.addEventListener('click', () => requestGtinExcel());
+    gtinRequestButton.addEventListener('click', () => openGpcSelectModal());
   }
   if (confirmYes) {
     confirmYes.addEventListener('click', () => {
@@ -751,18 +780,45 @@
   if (draftSave) {
     draftSave.addEventListener('click', () => saveMapping(collectDraftFields()));
   }
+  if (gpcSelectClose) {
+    gpcSelectClose.addEventListener('click', () => closeGpcSelectModal());
+  }
+  if (gpcSelectCancel) {
+    gpcSelectCancel.addEventListener('click', () => {
+      closeGpcSelectModal();
+      setStatus('Запрос GTIN отменен.', '');
+    });
+  }
+  if (gpcSearchInput) {
+    gpcSearchInput.addEventListener('input', () => scheduleGpcSearch());
+  }
+  if (gpcSelectList) {
+    gpcSelectList.addEventListener('change', () => {
+      const option = gpcSelectList.selectedOptions && gpcSelectList.selectedOptions[0];
+      selectedGpc = option ? { code: option.value, label: option.dataset.label || option.textContent } : { code: '', label: '' };
+      gpcSelectStatus.textContent = selectedGpc.code
+        ? `Выбран код: ${selectedGpc.label}`
+        : 'Выберите строку из списка.';
+      gpcSelectStatus.className = 'gpc-select-status';
+    });
+  }
+  if (gpcSelectConfirm) {
+    gpcSelectConfirm.addEventListener('click', async () => {
+      if (!selectedGpc.code) {
+        gpcSelectStatus.textContent = 'Выберите код GPC из списка.';
+        gpcSelectStatus.className = 'gpc-select-status error';
+        return;
+      }
+      closeGpcSelectModal();
+      await requestGtinExcel(selectedGpc.code, selectedGpc.label);
+    });
+  }
   saveButton.addEventListener('click', () => requestSaveMapping());
   if (markOrderButton) {
     markOrderButton.addEventListener('click', () => startMarkOrder());
   }
   if (orderHistoryButton) {
     orderHistoryButton.addEventListener('click', () => toggleOrderHistory());
-  }
-  if (printLabelsButton) {
-    printLabelsButton.addEventListener('click', () => startLabelPrint());
-  }
-  if (printHistoryButton) {
-    printHistoryButton.addEventListener('click', () => togglePrintHistory());
   }
   resetMarkOrderInputs();
 
@@ -796,7 +852,7 @@
     }
   });
 
-  async function requestGtinExcel(gpcCode = '') {
+  async function requestGtinExcel(gpcCode = '', gpcLabel = '') {
     setStatus('Формируем заявку GTIN...', '');
     if (gtinRequestButton) gtinRequestButton.disabled = true;
     try {
@@ -809,12 +865,7 @@
       if (response.status === 409 || contentType.includes('application/json')) {
         const payload = await response.json().catch(() => ({}));
         if (response.status === 409 && payload.gpc_required) {
-          const code = window.prompt(payload.message || 'Укажите код GPC для категории WB', '');
-          if (code && code.trim()) {
-            await requestGtinExcel(code.trim());
-          } else {
-            setStatus('Запрос GTIN отменен.', '');
-          }
+          openGpcSelectModal(payload);
           return;
         }
         setStatus(payload.message || payload.detail || 'Не удалось сформировать заявку GTIN.', 'error');
@@ -826,6 +877,7 @@
       }
       const blob = await response.blob();
       downloadBlob(blob, fileNameFromContentDisposition(response.headers.get('content-disposition')) || 'gtin_request.xlsx');
+      updateCurrentGpcInfo(gpcCode, gpcLabel);
       setStatus('Файл заявки GTIN сформирован.', 'success');
     } catch (error) {
       setStatus('Не удалось сформировать заявку GTIN.', 'error');
@@ -848,6 +900,90 @@
   function fileNameFromContentDisposition(header) {
     const match = String(header || '').match(/filename="([^"]+)"/i);
     return match ? match[1] : '';
+  }
+
+  async function openGpcSelectModal(payload = null) {
+    if (!gpcModal || !gpcSearchInput || !gpcSelectList) return;
+    const current = payload && payload.current_gpc ? payload.current_gpc : {
+      code: page.dataset.currentGpcCode || '',
+      label: page.dataset.currentGpcLabel || '',
+    };
+    selectedGpc = {
+      code: current.code || selectedGpc.code || '',
+      label: current.label || selectedGpc.label || '',
+    };
+    gpcMessage.textContent = payload && payload.message
+      ? payload.message
+      : `Выберите код GPC для категории WB: ${page.dataset.wbProductType || ''}`;
+    gpcCurrentModal.textContent = selectedGpc.code
+      ? `Текущий закрепленный код: ${selectedGpc.label || selectedGpc.code}`
+      : 'Код GPC для этой категории пока не выбран.';
+    gpcSearchInput.value = '';
+    gpcSelectStatus.textContent = selectedGpc.code
+      ? `Можно оставить текущий код: ${selectedGpc.label || selectedGpc.code}`
+      : 'Начните вводить код или описание, затем выберите строку из списка.';
+    gpcSelectStatus.className = 'gpc-select-status';
+    gpcModal.hidden = false;
+    renderGpcOptions(payload && Array.isArray(payload.items) ? payload.items : []);
+    await loadGpcOptions(page.dataset.wbProductType || '', true);
+    window.setTimeout(() => gpcSearchInput.focus(), 0);
+  }
+
+  function closeGpcSelectModal() {
+    if (gpcModal) gpcModal.hidden = true;
+  }
+
+  async function loadGpcOptions(query, fallbackToTop = false) {
+    if (!gpcSelectList) return;
+    try {
+      const url = `/api/gpc-catalog?q=${encodeURIComponent(query || '')}&limit=100`;
+      const response = await fetch(url);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || 'GPC catalog error');
+      const items = payload.items || [];
+      if (!items.length && fallbackToTop && query) {
+        await loadGpcOptions('', false);
+        return;
+      }
+      renderGpcOptions(items);
+    } catch (error) {
+      gpcSelectList.innerHTML = '';
+      gpcSelectStatus.textContent = 'Не удалось загрузить справочник GPC.';
+      gpcSelectStatus.className = 'gpc-select-status error';
+    }
+  }
+
+  function renderGpcOptions(items) {
+    if (!gpcSelectList) return;
+    gpcSelectList.innerHTML = '';
+    for (const item of items || []) {
+      const option = document.createElement('option');
+      option.value = item.code || '';
+      option.textContent = item.label || `${item.code || ''} — ${item.description || ''}`;
+      option.dataset.label = option.textContent;
+      gpcSelectList.appendChild(option);
+    }
+    if (selectedGpc.code) {
+      const currentOption = Array.from(gpcSelectList.options).find((option) => option.value === selectedGpc.code);
+      if (currentOption) currentOption.selected = true;
+    }
+  }
+
+  function updateCurrentGpcInfo(code, label) {
+    if (!code) return;
+    const finalLabel = label || code;
+    page.dataset.currentGpcCode = code;
+    page.dataset.currentGpcLabel = finalLabel;
+    selectedGpc = { code, label: finalLabel };
+    if (gpcCurrentLabel) gpcCurrentLabel.textContent = finalLabel;
+    if (gpcCurrentInfo) gpcCurrentInfo.hidden = false;
+  }
+
+  function scheduleGpcSearch() {
+    window.clearTimeout(gpcSearchTimer);
+    gpcSearchTimer = window.setTimeout(() => {
+      loadGpcOptions(gpcSearchInput ? gpcSearchInput.value : '');
+    }, 220);
   }
 
   async function toggleOrderHistory() {
@@ -912,55 +1048,33 @@
     });
   }
 
-  async function startLabelPrint() {
-    const template = labelTemplateSelect ? labelTemplateSelect.value : 'srad';
-    setPrintLabelStatus('Готовим PDF этикеток...', '');
-    if (printLabelsButton) printLabelsButton.disabled = true;
-    try {
-      const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/label-print`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ template }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || !payload.ok) {
-        setPrintLabelStatus(payload.message || payload.detail || 'Не удалось создать PDF этикеток.', 'error');
-        return;
-      }
-      setPrintLabelStatus(payload.message || 'PDF этикеток создан.', 'success');
-      clearReadyPrintCounts();
-      if (payload.download_url) {
-        window.open(payload.download_url, '_blank', 'noopener');
-      }
-      if (printHistoryPanel && !printHistoryPanel.hidden) {
-        renderPrintHistory(payload.history || []);
-        setPrintHistoryMessage('', '');
-      }
-    } catch (error) {
-      setPrintLabelStatus('Не удалось создать PDF этикеток.', 'error');
-    } finally {
-      if (printLabelsButton) printLabelsButton.disabled = false;
-    }
-  }
-
-  async function togglePrintHistory() {
-    if (!printHistoryPanel) return;
-    if (!printHistoryPanel.hidden) {
+  async function showPrintHistoryForItem(item) {
+    if (!printHistoryPanel || !item || !item.id) return;
+    if (activePrintHistoryItemId === item.id && !printHistoryPanel.hidden) {
       printHistoryPanel.hidden = true;
+      activePrintHistoryItemId = '';
       return;
     }
+    activePrintHistoryItemId = item.id;
+    const label = item.artifact_name || `CSV размер ${item.size || '-'}`;
+    if (printHistoryTitle) printHistoryTitle.textContent = `История печати: ${label}`;
     printHistoryPanel.hidden = false;
-    await loadPrintHistory();
+    await loadPrintHistory(item.id);
   }
 
-  async function loadPrintHistory(silent = false) {
+  async function loadPrintHistory(runItemId, silent = false) {
     if (!printHistoryBody) return;
+    if (!runItemId) {
+      renderPrintHistory([]);
+      setPrintHistoryMessage('Выберите CSV в истории заказов.', '');
+      return;
+    }
     if (!silent) {
       setPrintHistoryMessage('Загружаем историю печати...', '');
-      if (printHistoryButton) printHistoryButton.disabled = true;
     }
     try {
-      const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/label-prints`);
+      const query = new URLSearchParams({ run_item_id: runItemId });
+      const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/label-prints?${query.toString()}`);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload.ok) {
         setPrintHistoryMessage(payload.message || payload.detail || 'Не удалось загрузить историю печати.', 'error');
@@ -970,8 +1084,6 @@
       if (!silent) setPrintHistoryMessage('', '');
     } catch (error) {
       setPrintHistoryMessage('Не удалось загрузить историю печати.', 'error');
-    } finally {
-      if (!silent && printHistoryButton) printHistoryButton.disabled = false;
     }
   }
 
@@ -1041,10 +1153,20 @@
   function appendOrderActionCell(tr, run, item) {
     const td = document.createElement('td');
     td.className = 'template-cell order-action-cell';
+    let hasAction = false;
     if (item.status === 'failed' && run.id && item.id) {
       appendOrderRetryButton(td, run.id, item.id);
-      appendOrderRecoverButton(td, run.id, item.id);
-    } else {
+      appendOrderRecoverButton(td, run.id, item.id, item.label_template || 'srad');
+      hasAction = true;
+    } else if (isActiveOrderItem(item.status || '') && run.id) {
+      appendOrderRunResumeButton(td, run.id);
+      hasAction = true;
+    }
+    if (item.artifact_id && item.id) {
+      appendOrderPrintHistoryButton(td, item);
+      hasAction = true;
+    }
+    if (!hasAction) {
       td.textContent = '-';
     }
     tr.appendChild(td);
@@ -1059,13 +1181,56 @@
     container.appendChild(button);
   }
 
-  function appendOrderRecoverButton(container, runId, itemId) {
+  function appendOrderRecoverButton(container, runId, itemId, template = 'srad') {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'secondary';
     button.textContent = 'Восстановить';
-    button.addEventListener('click', () => recoverMarkOrderItem(runId, itemId, button));
+    button.addEventListener('click', () => recoverMarkOrderItem(runId, itemId, template, button));
     container.appendChild(button);
+  }
+
+  function appendOrderPrintHistoryButton(container, item) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary';
+    button.textContent = 'История печати';
+    button.addEventListener('click', () => showPrintHistoryForItem(item));
+    container.appendChild(button);
+  }
+
+  function appendOrderRunResumeButton(container, runId) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary';
+    button.textContent = 'Восстановить';
+    button.addEventListener('click', () => resumeMarkOrderRun(runId, button));
+    container.appendChild(button);
+  }
+
+  async function resumeMarkOrderRun(runId, button) {
+    if (!runId) return;
+    if (button) button.disabled = true;
+    setOrderHistoryMessage('Восстанавливаем выполнение заказа...', '');
+    try {
+      const response = await fetch(`/api/product-cards/${encodeURIComponent(page.dataset.wbArticle || '')}/mark-orders/${encodeURIComponent(runId)}/resume`, {
+        method: 'POST',
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.ok) {
+        setOrderHistoryMessage(payload.message || payload.detail || 'Не удалось восстановить выполнение заказа.', 'error');
+        return;
+      }
+      currentMarkOrderRunId = runId;
+      applyMarkOrderStatus(payload.status || {});
+      await loadOrderHistory(true);
+      scheduleMarkOrderPolling();
+      setOrderHistoryMessage('', '');
+    } catch (error) {
+      setOrderHistoryMessage('Не удалось восстановить выполнение заказа.', 'error');
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
   async function retryMarkOrderItem(runId, itemId, button) {
@@ -1093,14 +1258,13 @@
     }
   }
 
-  async function recoverMarkOrderItem(runId, itemId, button) {
+  async function recoverMarkOrderItem(runId, itemId, template, button) {
     if (!runId || !itemId) return;
     const markingId = window.prompt('ID операции нанесения Текшер', '');
     if (!markingId || !markingId.trim()) return;
     const transgranId = window.prompt('ID операции трансграна Текшер', '');
     if (!transgranId || !transgranId.trim()) return;
     const markPrinted = window.confirm('Этикетки уже напечатаны вручную? Если да, PDF будет добавлен в историю печати, а готовность к печати обнулится.');
-    const template = labelTemplateSelect ? labelTemplateSelect.value : 'srad';
     if (button) button.disabled = true;
     setOrderHistoryMessage('Восстанавливаем строку заказа...', '');
     try {
@@ -1121,12 +1285,9 @@
       }
       applyMarkOrderStatus(payload.status || {});
       await loadOrderHistory(true);
-      if (markPrinted) {
-        clearReadyPrintCounts();
-        if (printHistoryPanel && !printHistoryPanel.hidden) {
-          renderPrintHistory(payload.print_history || []);
-          setPrintHistoryMessage('', '');
-        }
+      if (markPrinted && printHistoryPanel && !printHistoryPanel.hidden && activePrintHistoryItemId === itemId) {
+        renderPrintHistory(payload.print_history || []);
+        setPrintHistoryMessage('', '');
       }
       setOrderHistoryMessage('Строка заказа восстановлена.', 'success');
     } catch (error) {
@@ -1175,7 +1336,7 @@
       option.textContent = template.label;
       select.appendChild(option);
     });
-    select.value = labelTemplateSelect ? labelTemplateSelect.value : printTemplateValue(item.template);
+    select.value = printTemplateValue(item.template);
 
     const button = document.createElement('button');
     button.type = 'button';
@@ -1212,7 +1373,6 @@
       if (payload.download_url) {
         window.open(payload.download_url, '_blank', 'noopener');
       }
-      clearReadyPrintCounts();
       renderPrintHistory(payload.history || []);
     } catch (error) {
       setPrintHistoryMessage('Не удалось создать PDF для повторной печати.', 'error');
@@ -1321,6 +1481,7 @@
         gtin,
         quantity,
         transgran: Boolean(tr.querySelector('.transgran-checkbox')?.checked),
+        label_template: printTemplateValue(tr.querySelector('.order-template-select')?.value),
       });
     });
     return { rows, hasMissingGtin };
@@ -1348,9 +1509,26 @@
         return;
       }
       applyMarkOrderStatus(payload.status || {});
+      handleAutoPrints(payload.auto_prints || []);
       if (orderHistoryPanel && !orderHistoryPanel.hidden) loadOrderHistory(true);
+      if (activePrintHistoryItemId && printHistoryPanel && !printHistoryPanel.hidden) {
+        loadPrintHistory(activePrintHistoryItemId, true);
+      }
     } catch (error) {
       setMarkOrderStatus('Не удалось обновить статус заказа ЧЗ.', 'error');
+    }
+  }
+
+  function handleAutoPrints(autoPrints) {
+    const rows = Array.isArray(autoPrints) ? autoPrints : [];
+    const failed = rows.find((row) => row && row.ok === false);
+    if (failed) {
+      setMarkOrderStatus(failed.message || 'Не удалось автоматически создать PDF этикеток.', 'error');
+      return;
+    }
+    const created = rows.filter((row) => row && row.ok);
+    if (created.length) {
+      setMarkOrderStatus(`PDF этикеток создан автоматически: ${created.length}.`, 'success');
     }
   }
 
@@ -1359,7 +1537,6 @@
     items.forEach((item) => {
       const isError = item.status === 'failed' || Boolean(item.error);
       setOrderRowStatus(item.size || '', item.status_text || item.error || item.status || '', isError ? 'error' : '', item);
-      updateReadyPrintCount(item);
     });
     const runStatus = payload.run && payload.run.status ? payload.run.status : '';
     const hasActiveRows = items.some((item) => isActiveOrderItem(item.status || ''));
@@ -1404,35 +1581,15 @@
       cell.appendChild(statusText);
       cell.title = message || '';
       cell.classList.toggle('error', kind === 'error');
-      if (item && item.status === 'failed' && currentMarkOrderRunId && item.id) {
+      if (item && currentMarkOrderRunId) {
         cell.appendChild(document.createElement('br'));
-        appendOrderRetryButton(cell, currentMarkOrderRunId, item.id);
+        if (item.status === 'failed' && item.id) {
+          appendOrderRetryButton(cell, currentMarkOrderRunId, item.id);
+          appendOrderRecoverButton(cell, currentMarkOrderRunId, item.id, item.label_template || 'srad');
+        } else if (isActiveOrderItem(item.status || '')) {
+          appendOrderRunResumeButton(cell, currentMarkOrderRunId);
+        }
       }
-    });
-  }
-
-  function updateReadyPrintCount(item) {
-    const hasExplicitCount = Object.prototype.hasOwnProperty.call(item || {}, 'ready_to_print_count');
-    const explicitCount = hasExplicitCount ? Number.parseInt(item.ready_to_print_count, 10) : Number.NaN;
-    const operations = Array.isArray(item.operations) ? item.operations : [];
-    const marking = operations.find((operation) => operation.kind === 'marking');
-    if (!Number.isFinite(explicitCount) && (!marking || String(marking.status || '').toUpperCase() !== 'ACCEPTED')) return;
-    document.querySelectorAll('tr[data-print-row-size]').forEach((tr) => {
-      if (normalize(tr.dataset.printRowSize || '') !== normalize(item.size || '')) return;
-      const cell = tr.querySelector('[data-ready-print]');
-      if (!cell) return;
-      const quantity = Number.isFinite(explicitCount)
-        ? explicitCount
-        : (Number.parseInt(item.quantity || '0', 10) || 0);
-      cell.textContent = String(quantity);
-      cell.title = String(quantity);
-    });
-  }
-
-  function clearReadyPrintCounts() {
-    document.querySelectorAll('[data-ready-print]').forEach((cell) => {
-      cell.textContent = '0';
-      cell.title = '0';
     });
   }
 
@@ -1440,12 +1597,6 @@
     if (!markOrderStatus) return;
     markOrderStatus.textContent = message || '';
     markOrderStatus.className = `order-run-status ${kind || ''}`.trim();
-  }
-
-  function setPrintLabelStatus(message, kind) {
-    if (!printLabelStatus) return;
-    printLabelStatus.textContent = message || '';
-    printLabelStatus.className = `order-run-status ${kind || ''}`.trim();
   }
 
   function requestSaveMapping() {
@@ -1569,9 +1720,9 @@
       const existingText = existing.length === 1
         ? `Карточка ${existing[0]} создана ранее`
         : `Карточки ${existing.join(', ')} созданы ранее`;
-      draftMessage.textContent = `${existingText}, будут созданы карточки для GTIN: ${create.join(', ')}.`;
+      draftMessage.textContent = `${existingText}, будут созданы карточки в Текшер для GTIN: ${create.join(', ')}.`;
     } else {
-      draftMessage.textContent = `Будут созданы карточки для GTIN: ${create.join(', ')}.`;
+      draftMessage.textContent = `Будут созданы карточки в Текшер для GTIN: ${create.join(', ')}.`;
     }
     draftGtins.replaceChildren(...create.map((gtin) => {
       const item = document.createElement('span');

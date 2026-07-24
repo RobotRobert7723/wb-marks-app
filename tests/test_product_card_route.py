@@ -2,10 +2,12 @@ import json
 import unittest
 from contextlib import contextmanager
 from dataclasses import replace
+from types import SimpleNamespace
 from datetime import date, datetime, timezone
 from base64 import b64encode
 from io import BytesIO
 from tempfile import TemporaryDirectory
+from zipfile import ZipFile
 
 from fastapi.testclient import TestClient
 from itsdangerous import TimestampSigner
@@ -29,7 +31,10 @@ class ProductCardRouteTests(unittest.TestCase):
         webapp.create_all = lambda: None
         webapp.load_config = lambda: AppConfig(secret_key="test-secret")
         webapp.session_scope = lambda: FakeSessionScope()
-        webapp.get_or_create_settings = lambda _session, _user_id: object()
+        webapp.get_or_create_settings = lambda _session, _user_id: SimpleNamespace(
+            teksher_uot_name='ОсОО "ЭмМаркет КейДжи"',
+            teksher_gcp="470006325",
+        )
         webapp.settings_to_app_config = lambda _settings: AppConfig(wb_api_token="token")
         webapp.teksher_mapping_service = FakeTeksherMappingService()
         webapp.teksher_product_service = FakeTeksherProductService()
@@ -82,14 +87,15 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn("Карточка WB 847012873", page.text)
             self.assertIn('data-wb-article="847012873"', page.text)
             self.assertIn("/product-cards/847012873", page.text)
-            self.assertIn(".mapping-table .ready-print-head { text-align: left; }", page.text)
-            self.assertIn(".mapping-table .ready-print-cell { text-align: left; }", page.text)
-            self.assertIn('class="template-head ready-print-head"', page.text)
-            self.assertIn("Готовы к печати", page.text)
+            self.assertNotIn(".mapping-table .ready-print-head { text-align: left; }", page.text)
+            self.assertNotIn(".mapping-table .ready-print-cell { text-align: left; }", page.text)
+            self.assertNotIn('class="template-head ready-print-head"', page.text)
+            self.assertNotIn("Готовы к печати", page.text)
+            self.assertNotIn("<h2>Печать этикеток</h2>", page.text)
             self.assertNotIn("Готовы к нанесению", page.text)
             self.assertNotIn("<th class=\"template-head\">Напечатать</th>", page.text)
-            self.assertIn('class="template-cell ready-print-cell" data-ready-print', page.text)
-            self.assertIn("data-ready-print", page.text)
+            self.assertNotIn('class="template-cell ready-print-cell" data-ready-print', page.text)
+            self.assertNotIn("data-ready-print", page.text)
             self.assertIn("Заказ ЧЗ в Текшер", page.text)
             self.assertIn('data-order-gtin', page.text)
             self.assertIn('class="order-count-input"', page.text)
@@ -98,6 +104,9 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn("Трансгран", page.text)
             self.assertIn('class="transgran-checkbox"', page.text)
             self.assertIn("checked", page.text)
+            self.assertIn('class="order-template-select"', page.text)
+            self.assertIn('<option value="srad" selected>SRad</option>', page.text)
+            self.assertIn('<option value="simple_brand">SIMPLE Brand</option>', page.text)
             self.assertIn("Статус", page.text)
             self.assertIn('id="mark-order-button"', page.text)
             self.assertIn("data-order-status", page.text)
@@ -125,14 +134,13 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn('data-wb-brand="ErLine"', page.text)
             self.assertIn('data-has-mapping="false"', page.text)
             self.assertIn('id="gtin-request-button"', page.text)
+            self.assertIn('id="gpc-select-modal"', page.text)
+            self.assertIn("/api/gpc-catalog", page.text)
             self.assertIn('id="mapping-save-button" class="secondary" disabled', page.text)
-            self.assertIn('id="label-template-select"', page.text)
-            self.assertIn('<option value="srad" selected>SRad</option>', page.text)
-            self.assertIn('<option value="simple_brand">SIMPLE Brand</option>', page.text)
-            self.assertIn('id="print-labels-button"', page.text)
-            self.assertIn('id="print-history-button"', page.text)
+            self.assertNotIn('id="label-template-select"', page.text)
+            self.assertNotIn('id="print-labels-button"', page.text)
+            self.assertNotIn('id="print-history-button"', page.text)
             self.assertIn('id="print-history-panel" class="card order-history-panel print-history-panel"', page.text)
-            self.assertIn("/label-print", page.text)
             self.assertIn("/label-prints", page.text)
             self.assertIn("Для этой карточки уже есть GTIN. Действительно хотите обновить", page.text)
             self.assertIn("В таблице есть красные поля. Сохранить?", page.text)
@@ -153,6 +161,61 @@ class ProductCardRouteTests(unittest.TestCase):
             webapp.product_card_service = old_product_card_service
             webapp.teksher_mapping_service = old_teksher_mapping_service
             webapp.teksher_product_service = old_teksher_product_service
+
+    def test_gpc_catalog_endpoint_searches_database(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session
+        from sqlalchemy.pool import StaticPool
+        from wb_marks_app.db import Base
+        from wb_marks_app.models import AppConfig
+        from wb_marks_app.server_models import GpcCatalogModel
+
+        old_create_all = webapp.create_all
+        old_load_config = webapp.load_config
+        old_session_scope = webapp.session_scope
+        engine = create_engine(
+            "sqlite:///:memory:",
+            future=True,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        with Session(engine) as session:
+            session.add(GpcCatalogModel(code="10001335", description="Брюки/Шорты"))
+            session.add(GpcCatalogModel(code="10001359", description="Спортивная одежда - Верхняя часть тела"))
+            session.commit()
+
+        @contextmanager
+        def test_session_scope():
+            with Session(engine) as session:
+                try:
+                    yield session
+                    session.commit()
+                except Exception:
+                    session.rollback()
+                    raise
+
+        webapp.create_all = lambda: None
+        webapp.load_config = lambda: AppConfig(secret_key="test-secret")
+        webapp.session_scope = test_session_scope
+        try:
+            app = webapp.create_app()
+            client = TestClient(app)
+            client.cookies.set("wb_marks_session", _session_cookie({"user_id": "user-1", "login": "tester"}, "test-secret"))
+
+            response = client.get("/api/gpc-catalog?q=брюки")
+
+            self.assertEqual(200, response.status_code)
+            self.assertEqual(
+                [{"code": "10001335", "description": "Брюки/Шорты", "label": "10001335 — Брюки/Шорты"}],
+                response.json()["items"],
+            )
+            client.close()
+        finally:
+            webapp.create_all = old_create_all
+            webapp.load_config = old_load_config
+            webapp.session_scope = old_session_scope
 
     def test_product_card_page_uses_teksher_data_for_saved_gtin(self) -> None:
         import wb_marks_app.webapp as webapp
@@ -411,7 +474,7 @@ class ProductCardRouteTests(unittest.TestCase):
         from sqlalchemy.pool import StaticPool
         from wb_marks_app.db import Base
         from wb_marks_app.models import AppConfig
-        from wb_marks_app.server_models import GpcCategoryMappingModel
+        from wb_marks_app.server_models import GpcCatalogModel, GpcCategoryMappingModel
         from wb_marks_app.services.product_cards import ProductCardTemplate, ProductCardMappingRow, WbProductSummary
 
         old_create_all = webapp.create_all
@@ -427,6 +490,9 @@ class ProductCardRouteTests(unittest.TestCase):
             poolclass=StaticPool,
         )
         Base.metadata.create_all(engine)
+        with Session(engine) as session:
+            session.add(GpcCatalogModel(code="10001359", description="Спортивная одежда - Верхняя часть тела"))
+            session.commit()
 
         @contextmanager
         def test_session_scope():
@@ -441,7 +507,10 @@ class ProductCardRouteTests(unittest.TestCase):
         webapp.create_all = lambda: None
         webapp.load_config = lambda: AppConfig(secret_key="test-secret")
         webapp.session_scope = test_session_scope
-        webapp.get_or_create_settings = lambda _session, _user_id: object()
+        webapp.get_or_create_settings = lambda _session, _user_id: SimpleNamespace(
+            teksher_uot_name='ОсОО "ЭмМаркет КейДжи"',
+            teksher_gcp="470006325",
+        )
         webapp.settings_to_app_config = lambda _settings: AppConfig(wb_api_token="token")
         webapp.product_card_service = FakeProductCardService(
             ProductCardTemplate(
@@ -518,6 +587,7 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertIn("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", response.headers["content-type"])
             workbook = load_workbook(BytesIO(response.content))
             worksheet = workbook[workbook.sheetnames[0]]
+            self.assertEqual('ОсОО "ЭмМаркет КейДжи" (470006325)', worksheet.cell(2, 2).value)
             self.assertEqual("ErLine", worksheet.cell(7, 1).value)
             self.assertEqual("Русский", worksheet.cell(7, 3).value)
             self.assertEqual("Костюмы спортивные", worksheet.cell(7, 4).value)
@@ -528,9 +598,22 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertEqual("1", worksheet.cell(7, 19).value)
             self.assertEqual("Штуки", worksheet.cell(7, 20).value)
             self.assertEqual("Арт.cv_nk_white_smr, цвет: белый, р. 40", worksheet.cell(8, 5).value)
+            self.assertIsNone(worksheet.cell(9, 1).value)
+            self.assertIsNone(worksheet.cell(9, 5).value)
+            with ZipFile(BytesIO(response.content)) as archive:
+                names = archive.namelist()
+                self.assertIn("xl/externalLinks/externalLink1.xml", names)
+                self.assertIn("xl/externalLinks/_rels/externalLink1.xml.rels", names)
+                self.assertIn("xl/printerSettings/printerSettings1.bin", names)
+                self.assertIn("xl/sharedStrings.xml", names)
+                workbook_xml = archive.read("xl/workbook.xml").decode("utf-8")
+                self.assertIn("externalReferences", workbook_xml)
 
             cached_response = client.post("/api/product-cards/847012874/gtin-request", json={})
-            self.assertEqual(200, cached_response.status_code)
+            self.assertEqual(409, cached_response.status_code)
+            cached_payload = cached_response.json()
+            self.assertTrue(cached_payload["gpc_required"])
+            self.assertEqual("10001359", cached_payload["current_gpc"]["code"])
             with Session(engine) as session:
                 mapping = session.query(GpcCategoryMappingModel).one()
                 self.assertEqual("Костюмы спортивные", mapping.wb_category)
@@ -729,6 +812,8 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertEqual("gtin_excel", fake_mapping_service.saved[0]["source"])
             self.assertEqual("04709055620626", fake_mapping_service.saved[0]["rows"][0]["gtin"])
             self.assertEqual(["draft-1"], payload["teksher_draft_ids"])
+            self.assertEqual(["draft-1"], payload["teksher_published_draft_ids"])
+            self.assertEqual([], payload["teksher_publish_forbidden_ids"])
             self.assertEqual("04709055620626", fake_teksher_product_service.calls[0]["rows"][0]["gtin"])
             client.close()
         finally:
@@ -919,6 +1004,7 @@ class ProductCardRouteTests(unittest.TestCase):
                             "gtin": "04709055620626",
                             "quantity": 2,
                             "transgran": False,
+                            "label_template": "simple_brand",
                         }
                     ]
                 },
@@ -932,6 +1018,7 @@ class ProductCardRouteTests(unittest.TestCase):
             self.assertEqual("847012873", fake_workflow_service.calls[0]["wb_article"])
             self.assertEqual(2, fake_workflow_service.calls[0]["rows"][0]["quantity"])
             self.assertFalse(fake_workflow_service.calls[0]["rows"][0]["transgran"])
+            self.assertEqual("simple_brand", fake_workflow_service.calls[0]["rows"][0]["label_template"])
             self.assertEqual("Ожидает запуска", payload["status"]["items"][0]["status_text"])
             client.close()
         finally:
@@ -941,6 +1028,49 @@ class ProductCardRouteTests(unittest.TestCase):
             webapp.get_or_create_settings = old_get_or_create_settings
             webapp.settings_to_app_config = old_settings_to_app_config
             webapp.product_card_service = old_product_card_service
+            webapp.workflow_service = old_workflow_service
+            webapp._get_user_run = old_get_user_run
+            webapp._serialize_product_card_order_run = old_serialize_product_card_order_run
+
+    def test_mark_order_resume_endpoint_restarts_background_run(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from wb_marks_app.models import AppConfig
+
+        old_create_all = webapp.create_all
+        old_load_config = webapp.load_config
+        old_session_scope = webapp.session_scope
+        old_workflow_service = webapp.workflow_service
+        old_get_user_run = webapp._get_user_run
+        old_serialize_product_card_order_run = webapp._serialize_product_card_order_run
+        fake_workflow_service = FakeWorkflowRunService()
+        webapp.create_all = lambda: None
+        webapp.load_config = lambda: AppConfig(secret_key="test-secret")
+        webapp.session_scope = lambda: FakeSessionScope()
+        webapp.workflow_service = fake_workflow_service
+        webapp._get_user_run = lambda _session, run_id, _user_id: type(
+            "Run",
+            (),
+            {"id": run_id, "status": "running", "source_url": "/product-cards/847012873"},
+        )()
+        webapp._serialize_product_card_order_run = lambda run, _session: {
+            "run": {"id": run.id, "status": run.status},
+            "items": [{"size": "38", "gtin": "04709055620626", "status": "order_running"}],
+        }
+        try:
+            app = webapp.create_app()
+            client = TestClient(app)
+            client.cookies.set("wb_marks_session", _session_cookie({"user_id": "user-1", "login": "tester"}, "test-secret"))
+
+            response = client.post("/api/product-cards/847012873/mark-orders/run-1/resume")
+
+            self.assertEqual(200, response.status_code)
+            self.assertTrue(response.json()["ok"])
+            self.assertEqual(["run-1"], fake_workflow_service.started_runs)
+            client.close()
+        finally:
+            webapp.create_all = old_create_all
+            webapp.load_config = old_load_config
+            webapp.session_scope = old_session_scope
             webapp.workflow_service = old_workflow_service
             webapp._get_user_run = old_get_user_run
             webapp._serialize_product_card_order_run = old_serialize_product_card_order_run
@@ -1081,7 +1211,10 @@ class ProductCardRouteTests(unittest.TestCase):
         webapp.create_all = lambda: None
         webapp.load_config = lambda: AppConfig(secret_key="test-secret")
         webapp.session_scope = lambda: FakeSessionScope()
-        webapp._product_card_label_print_history = lambda request, _session, user_id, wb_article: [
+        calls = []
+        webapp._product_card_label_print_history = lambda request, _session, user_id, wb_article, run_item_id=None: calls.append(
+            run_item_id
+        ) or [
             {"id": "new-print", "created_at": "2026-06-23T10:00:00", "template": "SRad"},
             {"id": "old-print", "created_at": "2026-06-23T09:00:00", "template": "Simple"},
         ]
@@ -1090,18 +1223,148 @@ class ProductCardRouteTests(unittest.TestCase):
             client = TestClient(app)
             client.cookies.set("wb_marks_session", _session_cookie({"user_id": "user-1", "login": "tester"}, "test-secret"))
 
-            response = client.get("/api/product-cards/847012873/label-prints")
+            response = client.get("/api/product-cards/847012873/label-prints?run_item_id=item-1")
 
             self.assertEqual(200, response.status_code)
             payload = response.json()
             self.assertTrue(payload["ok"])
             self.assertEqual(["new-print", "old-print"], [item["id"] for item in payload["history"]])
+            self.assertEqual(["item-1"], calls)
             client.close()
         finally:
             webapp.create_all = old_create_all
             webapp.load_config = old_load_config
             webapp.session_scope = old_session_scope
             webapp._product_card_label_print_history = old_product_card_label_print_history
+
+    def test_label_print_history_includes_legacy_prints_for_selected_csv(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session
+        from wb_marks_app.db import Base
+        from wb_marks_app.server_models import ArtifactModel, LabelPrintJobModel, WorkflowRunItemModel, WorkflowRunModel
+
+        class FakeRequest:
+            def url_for(self, _name, file_id):
+                return f"http://testserver/api/labels/pdf/{file_id}"
+
+        engine = create_engine("sqlite:///:memory:", future=True)
+        Base.metadata.create_all(engine)
+        with Session(engine) as session:
+            run = WorkflowRunModel(
+                id="run-1",
+                user_id="user-1",
+                draft_id="run-1",
+                source_url="/product-cards/847012873",
+                status="completed",
+            )
+            next_run = WorkflowRunModel(
+                id="run-2",
+                user_id="user-1",
+                draft_id="run-2",
+                source_url="/product-cards/847012873",
+                status="completed",
+                created_at=datetime(2026, 6, 23, 11, 0, tzinfo=timezone.utc),
+            )
+            item = WorkflowRunItemModel(
+                id="item-1",
+                run=run,
+                barcode="2049271462634",
+                vendor_code="cv_nk_blue_smr",
+                size="38",
+                gtin="04709055620664",
+                quantity=1,
+                status="completed",
+                created_at=datetime(2026, 6, 23, 10, 0, tzinfo=timezone.utc),
+            )
+            next_item = WorkflowRunItemModel(
+                id="item-2",
+                run=next_run,
+                barcode="2049271462634",
+                vendor_code="cv_nk_blue_smr",
+                size="38",
+                gtin="04709055620664",
+                quantity=1,
+                status="completed",
+                created_at=datetime(2026, 6, 23, 11, 0, tzinfo=timezone.utc),
+            )
+            artifact = ArtifactModel(
+                run_item=item,
+                kind="csv",
+                file_name="item-1.csv",
+                file_path="item-1.csv",
+                created_at=datetime(2026, 6, 23, 10, 5, tzinfo=timezone.utc),
+            )
+            linked = LabelPrintJobModel(
+                id="linked-print",
+                user_id="user-1",
+                run_item_id="item-1",
+                wb_article="847012873",
+                wb_size="38",
+                gtin="04709055620664",
+                barcode="2049271462634",
+                quantity=1,
+                template="srad",
+                file_id="a" * 32,
+                file_name="linked.pdf",
+                status="created",
+                created_at=datetime(2026, 6, 23, 10, 20, tzinfo=timezone.utc),
+            )
+            legacy = LabelPrintJobModel(
+                id="legacy-print",
+                user_id="user-1",
+                run_item_id=None,
+                wb_article="847012873",
+                wb_size="38",
+                gtin="04709055620664",
+                barcode="2049271462634",
+                quantity=1,
+                template="simple",
+                file_id="b" * 32,
+                file_name="legacy.pdf",
+                status="created",
+                created_at=datetime(2026, 6, 23, 10, 10, tzinfo=timezone.utc),
+            )
+            before_csv = LabelPrintJobModel(
+                id="before-csv",
+                user_id="user-1",
+                wb_article="847012873",
+                wb_size="38",
+                gtin="04709055620664",
+                barcode="2049271462634",
+                quantity=1,
+                template="srad",
+                file_id="c" * 32,
+                file_name="before.pdf",
+                status="created",
+                created_at=datetime(2026, 6, 23, 10, 2, tzinfo=timezone.utc),
+            )
+            after_next = LabelPrintJobModel(
+                id="after-next",
+                user_id="user-1",
+                wb_article="847012873",
+                wb_size="38",
+                gtin="04709055620664",
+                barcode="2049271462634",
+                quantity=1,
+                template="srad",
+                file_id="d" * 32,
+                file_name="after.pdf",
+                status="created",
+                created_at=datetime(2026, 6, 23, 11, 5, tzinfo=timezone.utc),
+            )
+            session.add_all([run, next_run, item, next_item, artifact, linked, legacy, before_csv, after_next])
+            session.commit()
+
+            history = webapp._product_card_label_print_history(
+                FakeRequest(),
+                session,
+                "user-1",
+                "847012873",
+                run_item_id="item-1",
+            )
+
+        self.assertEqual(["linked-print", "legacy-print"], [row["id"] for row in history])
 
     def test_label_print_repeat_endpoint_uses_print_history_row(self) -> None:
         import wb_marks_app.webapp as webapp
@@ -1416,6 +1679,7 @@ class ProductCardRouteTests(unittest.TestCase):
                     self.assertTrue(result["ok"])
                     self.assertEqual(1, result["labels_count"])
                     self.assertEqual(1, result["pages_count"])
+                    self.assertEqual("wb_cv_nk_blue_smr_38.pdf", result["file_name"])
                     self.assertTrue((Path(tmp) / f"{result['file_id']}.pdf").exists())
                     jobs = session.query(LabelPrintJobModel).all()
                     self.assertEqual(1, len(jobs))
@@ -1423,6 +1687,8 @@ class ProductCardRouteTests(unittest.TestCase):
                     self.assertEqual("04709055620664", jobs[0].gtin)
                     self.assertEqual(1, jobs[0].quantity)
                     self.assertEqual("srad", jobs[0].template)
+                    self.assertEqual("wb_cv_nk_blue_smr_38.pdf", jobs[0].file_name)
+                    self.assertEqual(item.id, jobs[0].run_item_id)
                     self.assertEqual("SRad", result["history"][0]["template"])
                     self.assertEqual(1, len(captured_labels))
                     self.assertEqual("Sport suits", captured_labels[0].item_name)
@@ -1430,6 +1696,98 @@ class ProductCardRouteTests(unittest.TestCase):
                     self.assertEqual('ОсОО "ЭмирЛайн"', captured_labels[0].supplier_name)
                     self.assertEqual(date.today().strftime("%d.%m.%Y"), captured_labels[0].production_date)
                     self.assertEqual("КР, г. Бишкек, ул. Тестовая, 1", captured_labels[0].supplier_address)
+            finally:
+                webapp.render_labels_pdf = old_render_labels_pdf
+                webapp._label_pdf_file_path = old_label_pdf_file_path
+
+    def test_auto_print_completed_order_item_uses_saved_template_and_payload(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from pathlib import Path
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session
+        from wb_marks_app.db import Base
+        from wb_marks_app.server_models import AppSettingsModel, LabelPrintJobModel, MarkCodeModel, TeksherOperationModel, WorkflowRunItemModel, WorkflowRunModel
+        from wb_marks_app.services.labels import GS
+
+        class FakeRequest:
+            def url_for(self, _name, file_id):
+                return f"http://testserver/api/labels/pdf/{file_id}"
+
+        valid_mark_code = "0104709055620664215YudSpca<mc9X" + GS + "91EE12" + GS + "92" + ("A" * 44)
+        old_render_labels_pdf = webapp.render_labels_pdf
+        old_label_pdf_file_path = webapp._label_pdf_file_path
+        engine = create_engine("sqlite:///:memory:", future=True)
+        Base.metadata.create_all(engine)
+        with TemporaryDirectory() as tmp:
+            captured_labels = []
+
+            def fake_render_labels_pdf(labels, template):
+                captured_labels.extend(labels)
+                return b"%PDF\n/Type /Page\n/Type /Pages\n"
+
+            webapp.render_labels_pdf = fake_render_labels_pdf
+            webapp._label_pdf_file_path = lambda _user_id, file_id: Path(tmp) / f"{file_id}.pdf"
+            try:
+                with Session(engine) as session:
+                    settings = AppSettingsModel(user_id="user-1", supplier_name="Supplier")
+                    run = WorkflowRunModel(
+                        user_id="user-1",
+                        draft_id="run-auto",
+                        source_url="/product-cards/847012873",
+                        status="completed",
+                    )
+                    item = WorkflowRunItemModel(
+                        run=run,
+                        barcode="2049271462634",
+                        vendor_code="fallback_vendor",
+                        size="38",
+                        gtin="04709055620664",
+                        quantity=1,
+                        status="completed",
+                        label_template="simple_brand",
+                        label_payload_json=json.dumps(
+                            {
+                                "item_name": "Костюм спортивный",
+                                "vendor_code": "cv_nk_blue_smr",
+                                "size": "38",
+                                "color": "ГОЛУБОЙ",
+                                "composition": "polyester 100%",
+                                "barcode": "2049271462634",
+                                "country_of_origin": "KG",
+                                "brand": "ErLine",
+                            },
+                            ensure_ascii=True,
+                        ),
+                    )
+                    marking = TeksherOperationModel(run_item=item, operation_kind="marking", status="ACCEPTED")
+                    mark_code = MarkCodeModel(run_item=item, position=1, mark_code=valid_mark_code)
+                    session.add_all([settings, run, marking, mark_code])
+                    session.commit()
+
+                    first_result = webapp._auto_print_completed_order_items(
+                        FakeRequest(),
+                        session,
+                        "user-1",
+                        "847012873",
+                        run,
+                    )
+                    second_result = webapp._auto_print_completed_order_items(
+                        FakeRequest(),
+                        session,
+                        "user-1",
+                        "847012873",
+                        run,
+                    )
+
+                    jobs = session.query(LabelPrintJobModel).all()
+                    self.assertEqual(1, len(first_result))
+                    self.assertEqual([], second_result)
+                    self.assertEqual(1, len(jobs))
+                    self.assertEqual(item.id, jobs[0].run_item_id)
+                    self.assertEqual("simple_brand", jobs[0].template)
+                    self.assertEqual("wb_cv_nk_blue_smr_38.pdf", jobs[0].file_name)
+                    self.assertEqual("Костюм спортивный", captured_labels[0].item_name)
+                    self.assertEqual("голубой", captured_labels[0].color)
             finally:
                 webapp.render_labels_pdf = old_render_labels_pdf
                 webapp._label_pdf_file_path = old_label_pdf_file_path
@@ -1446,6 +1804,7 @@ class FakeSessionScope:
 class FakeWorkflowRunService:
     def __init__(self) -> None:
         self.calls = []
+        self.started_runs = []
 
     def create_product_card_run(self, user_id, wb_article, product_card, rows):
         self.calls.append(
@@ -1457,6 +1816,9 @@ class FakeWorkflowRunService:
             }
         )
         return "run-1"
+
+    def start_background(self, run_id):
+        self.started_runs.append(run_id)
 
 
 class FakeProductCardService:
@@ -1609,17 +1971,28 @@ class FakeTeksherProductService:
                 "draft_ids": [],
                 "created_gtins": [],
                 "existing_gtins": [str(row.get("gtin") or "") for row in rows_payload],
+                "published_draft_ids": [],
+                "publish_forbidden_ids": [],
             }
         if self.existing_gtins:
+            created_draft_ids = [
+                draft_id
+                for index, draft_id in enumerate(draft_ids)
+                if index < len(draft_ids)
+            ]
             return {
                 "draft_ids": draft_ids,
                 "created_gtins": [str(row.get("gtin") or "") for row in rows_payload if str(row.get("gtin") or "") not in self.existing_gtins],
                 "existing_gtins": [str(row.get("gtin") or "") for row in rows_payload if str(row.get("gtin") or "") in self.existing_gtins],
+                "published_draft_ids": created_draft_ids,
+                "publish_forbidden_ids": [],
             }
         return {
             "draft_ids": draft_ids,
             "created_gtins": [str(row.get("gtin") or "") for row in rows_payload],
             "existing_gtins": [],
+            "published_draft_ids": draft_ids,
+            "publish_forbidden_ids": [],
         }
 
     def ensure_product_drafts_for_mapping(self, product_card, rows_payload, config):

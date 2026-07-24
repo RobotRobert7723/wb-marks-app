@@ -26,6 +26,10 @@
         <input type="password" name="teksher_password" value="{{ raw_settings.teksher_password }}" />
       </div>
       <div>
+        <label>УОТ / GCP для запроса GTIN</label>
+        <input type="text" value="{{ settings.teksher_company_gcp_label or 'Не загружено' }}" readonly />
+      </div>
+      <div>
         <label>Получатель Трансгран</label>
         <input type="text" name="teksher_transgran_recipient_name" value="{{ settings.teksher_transgran_recipient_name }}" />
       </div>

@@ -350,7 +350,7 @@ def _draw_chz_label(
 ) -> None:
     _draw_centered(canvas, label.item_name, 29.0, 3.0, 9.4, font=_FONT_BOLD, max_width_mm=38.0)
     _draw_set_number(canvas, set_number, size_pt=11.0)
-    _draw_cz_logo(canvas, 4.0, 7.0)
+    _draw_cz_logo(canvas, 4.0, 5.5)
     if label.mark_code:
         _draw_datamatrix(canvas, _raw_datamatrix(raw_barcodes, label.mark_code), 4.0, 10.0, 23.5)
     if label.color:
@@ -426,7 +426,7 @@ def _draw_simple_brand_combo_label(
             break
 
     if label.mark_code:
-        _draw_cz_logo(canvas, 39.9, 21.2)
+        _draw_cz_logo(canvas, 39.9, 18.1)
         _draw_datamatrix(canvas, _raw_datamatrix(raw_barcodes, label.mark_code), 40.0, 22.8, 13.2)
     if label.mark_preview:
         _draw_text_fit(canvas, label.mark_preview, 20.8, 36.4, 34.0, 5.1, font=_FONT_REGULAR, min_size=3.8)
@@ -532,7 +532,8 @@ def _draw_code128(
 
 def _draw_cz_logo(canvas: Canvas, x_mm: float, y_top_mm: float) -> None:
     width_mm = 8.3
-    _draw_image_asset(canvas, _HONEST_SIGN_ASSET, x_mm, y_top_mm, width_mm, width_mm * 52 / 143)
+    height_mm = _asset_height_for_width(_HONEST_SIGN_ASSET, width_mm, fallback_ratio=52 / 143)
+    _draw_image_asset(canvas, _HONEST_SIGN_ASSET, x_mm, y_top_mm, width_mm, height_mm)
 
 
 def _draw_care_icons(canvas: Canvas, x_mm: float, y_top_mm: float) -> None:
@@ -561,6 +562,16 @@ def _draw_image_asset(
         height=_pt(height_mm),
         mask="auto",
     )
+
+
+def _asset_height_for_width(path: Path, width_mm: float, *, fallback_ratio: float) -> float:
+    if not path.exists():
+        return width_mm * fallback_ratio
+    reader = ImageReader(str(path))
+    width_px, height_px = reader.getSize()
+    if width_px <= 0:
+        return width_mm * fallback_ratio
+    return width_mm * height_px / width_px
 
 
 def _draw_hanger_icon(canvas: Canvas, x_mm: float, y_top_mm: float) -> None:

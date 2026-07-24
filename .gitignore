@@ -21,3 +21,4 @@ tmp-debug-profile/
 wb-marks-app-deploy.tar.gz
 ~$*.xlsx
 *.xlsx
+!src/wb_marks_app/assets/gpc_catalog.xlsx

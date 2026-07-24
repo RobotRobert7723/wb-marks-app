@@ -79,12 +79,14 @@ class SellerLabelsApiTests(unittest.TestCase):
                 "storeName": 'ОсОО "САДИЯН"',
                 "nmId": "336603350",
                 "vendorCode": "Adi_black_line_01",
+                "template": "simple_brand",
                 "items": [{"size": "36", "quantity": 2}],
             }
             first = client.post("/api/v1/labels/print-jobs", headers=_auth_headers(), json=body)
             self.assertEqual(202, first.status_code)
             self.assertEqual("queued", first.json()["status"])
             self.assertEqual("emission", first.json()["rows"][0]["status"])
+            self.assertEqual("simple_brand", client._test_context["workflow_service"].calls[0]["rows"][0]["label_template"])
 
             second = client.post("/api/v1/labels/print-jobs", headers=_auth_headers(), json=body)
             self.assertEqual(200, second.status_code)
@@ -96,7 +98,7 @@ class SellerLabelsApiTests(unittest.TestCase):
 
     def test_completed_print_job_generates_authorized_pdf(self) -> None:
         import wb_marks_app.webapp as webapp
-        from wb_marks_app.server_models import LabelApiJobModel, LabelApiJobRowModel, MarkCodeModel, TeksherOperationModel
+        from wb_marks_app.server_models import LabelApiJobModel, LabelApiJobRowModel, LabelPrintJobModel, MarkCodeModel, TeksherOperationModel, WorkflowRunModel
         from wb_marks_app.services.labels import GS
         from wb_marks_app.services.product_cards import ProductCardMappingRow
 
@@ -144,17 +146,29 @@ class SellerLabelsApiTests(unittest.TestCase):
                 session.add(LabelApiJobRowModel(job_id=job.id, size="36", quantity=1, gtin="04709055620664"))
                 session.commit()
                 job_id = job.id
+                run_id = run.id
 
             status = client.get(f"/api/v1/labels/print-jobs/{job_id}", headers=_auth_headers())
             self.assertEqual(200, status.status_code)
             payload = status.json()
             self.assertEqual("done", payload["status"])
             self.assertEqual("ready", payload["rows"][0]["status"])
+            self.assertEqual("готово к печати", payload["rows"][0]["statusLabel"])
             self.assertIn("/api/v1/labels/files/", payload["pdfUrl"])
+            self.assertEqual([], context["workflow_service"].started_runs)
 
             pdf = client.get(payload["pdfUrl"], headers=_auth_headers())
             self.assertEqual(200, pdf.status_code)
             self.assertEqual(b"%PDF\n/Type /Page\n/Type /Pages\n", pdf.content)
+            self.assertIn("wb_Adi_black_line_01_36.pdf", pdf.headers["content-disposition"])
+
+            with Session(context["engine"]) as session:
+                run = session.get(WorkflowRunModel, run_id)
+                self.assertEqual("completed", run.status)
+                print_jobs = session.query(LabelPrintJobModel).all()
+                self.assertEqual(1, len(print_jobs))
+                self.assertEqual("srad", print_jobs[0].template)
+                self.assertEqual("wb_Adi_black_line_01_36.pdf", print_jobs[0].file_name)
 
     def test_print_job_keeps_polling_until_rows_are_terminal(self) -> None:
         import wb_marks_app.webapp as webapp
@@ -329,10 +343,76 @@ class SellerLabelsApiTests(unittest.TestCase):
             self.assertEqual("error", final_rows["38"]["status"])
             self.assertEqual("ready", final_rows["40"]["status"])
             self.assertIn("/api/v1/labels/files/", final_payload["pdfUrl"])
+            self.assertIn("/api/v1/labels/files/", final_rows["36"]["pdfUrl"])
+            self.assertIn("/api/v1/labels/files/", final_rows["40"]["pdfUrl"])
+            self.assertNotEqual(final_rows["36"]["pdfUrl"], final_rows["40"]["pdfUrl"])
 
             with Session(context["engine"]) as session:
                 print_jobs = session.query(LabelPrintJobModel).order_by(LabelPrintJobModel.wb_size).all()
                 self.assertEqual([2, 1], [print_job.quantity for print_job in print_jobs])
+                self.assertEqual(
+                    ["wb_Adi_black_line_01_36.pdf", "wb_Adi_black_line_01_40.pdf"],
+                    [print_job.file_name for print_job in print_jobs],
+                )
+
+            pdf_36 = client.get(final_rows["36"]["pdfUrl"], headers=_auth_headers())
+            pdf_40 = client.get(final_rows["40"]["pdfUrl"], headers=_auth_headers())
+            self.assertEqual(200, pdf_36.status_code)
+            self.assertEqual(200, pdf_40.status_code)
+            self.assertIn("wb_Adi_black_line_01_36.pdf", pdf_36.headers["content-disposition"])
+            self.assertIn("wb_Adi_black_line_01_40.pdf", pdf_40.headers["content-disposition"])
+
+    def test_print_job_retry_resumes_orphaned_running_run(self) -> None:
+        import wb_marks_app.webapp as webapp
+        from wb_marks_app.server_models import LabelApiJobModel, LabelApiJobRowModel
+
+        with _patched_app(webapp) as client:
+            context = client._test_context
+            with Session(context["engine"]) as session:
+                run = _create_running_run(session)
+                run.error = "stale infrastructure error"
+                job = LabelApiJobModel(
+                    request_id="wb-labels-orphaned",
+                    request_hash="hash",
+                    wb_store_id="4006282",
+                    user_id="user-1",
+                    nm_id="336603350",
+                    vendor_code="Adi_black_line_01",
+                    template="srad",
+                    status="processing",
+                    run_id=run.id,
+                )
+                session.add(job)
+                session.flush()
+                session.add(
+                    LabelApiJobRowModel(
+                        job_id=job.id,
+                        size="36",
+                        quantity=1,
+                        gtin="04709055620664",
+                        status="error",
+                        error_message="Local polling timeout.",
+                    )
+                )
+                session.commit()
+                job_id = job.id
+
+            retry = client.post(
+                f"/api/v1/labels/print-jobs/{job_id}/retry",
+                headers=_auth_headers(),
+                json={"sizes": ["36"]},
+            )
+
+            self.assertEqual(200, retry.status_code)
+            payload = retry.json()
+            self.assertEqual("processing", payload["status"])
+            self.assertEqual("emission", payload["rows"][0]["status"])
+            self.assertEqual(["run-1"], context["workflow_service"].started_runs)
+            with Session(context["engine"]) as session:
+                from wb_marks_app.server_models import WorkflowRunModel
+
+                run = session.get(WorkflowRunModel, "run-1")
+                self.assertEqual("", run.error)
 
 
 class _FakeProductCardService:
@@ -347,6 +427,8 @@ class _FakeWorkflowService:
     def __init__(self, engine) -> None:
         self.engine = engine
         self.calls = []
+        self.started_runs = []
+        self.retried_items = []
 
     def create_product_card_run(self, user_id, wb_article, product_card, rows):
         self.calls.append({"user_id": user_id, "wb_article": wb_article, "rows": rows})
@@ -354,6 +436,23 @@ class _FakeWorkflowService:
             run = _create_running_run(session, quantity=rows[0]["quantity"])
             session.commit()
             return run.id
+
+    def start_background(self, run_id):
+        self.started_runs.append(run_id)
+
+    def retry_items(self, run_id, item_ids):
+        self.retried_items.append({"run_id": run_id, "item_ids": set(item_ids or [])})
+        with Session(self.engine) as session:
+            from wb_marks_app.server_models import WorkflowRunItemModel, WorkflowRunModel
+
+            run = session.get(WorkflowRunModel, run_id)
+            if run is not None:
+                run.status = "running"
+            for item in session.query(WorkflowRunItemModel).filter(WorkflowRunItemModel.run_id == run_id).all():
+                if item.id in set(item_ids or []) and item.status == "failed":
+                    item.status = "pending"
+                    item.error = ""
+            session.commit()
 
 
 @contextmanager
@@ -402,12 +501,13 @@ def _patched_app(webapp, product_card=None):
             webapp.session_scope = scope
             if product_card is not None:
                 webapp.product_card_service = _FakeProductCardService(product_card)
-            webapp.workflow_service = _FakeWorkflowService(engine)
+            fake_workflow_service = _FakeWorkflowService(engine)
+            webapp.workflow_service = fake_workflow_service
             webapp.render_labels_pdf = lambda _labels, template: b"%PDF\n/Type /Page\n/Type /Pages\n"
             webapp._label_pdf_file_path = lambda _user_id, file_id: Path(tmp) / f"{file_id}.pdf"
 
             client = TestClient(webapp.create_app())
-            client._test_context = {"engine": engine}
+            client._test_context = {"engine": engine, "workflow_service": fake_workflow_service}
             try:
                 yield client
             finally:

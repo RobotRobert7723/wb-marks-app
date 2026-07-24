@@ -92,6 +92,8 @@ def get_or_create_settings(session: Session, user_id: str) -> AppSettingsModel:
         wb_api_base_url=base.wb_api_base_url or "https://supplies-api.wildberries.ru",
         teksher_username=base.teksher_username,
         teksher_password=base.teksher_password,
+        teksher_uot_name=base.teksher_uot_name,
+        teksher_gcp=base.teksher_gcp,
         teksher_transgran_recipient_name=base.teksher_transgran_recipient_name,
         teksher_transgran_recipient_inn=base.teksher_transgran_recipient_inn,
         teksher_transgran_recipient_kpp=base.teksher_transgran_recipient_kpp,
@@ -146,6 +148,8 @@ def settings_to_app_config(settings: AppSettingsModel) -> AppConfig:
             "wb_api_base_url": settings.wb_api_base_url,
             "teksher_username": settings.teksher_username,
             "teksher_password": settings.teksher_password,
+            "teksher_uot_name": settings.teksher_uot_name,
+            "teksher_gcp": settings.teksher_gcp,
             "teksher_transgran_recipient_name": settings.teksher_transgran_recipient_name,
             "teksher_transgran_recipient_inn": settings.teksher_transgran_recipient_inn,
             "teksher_transgran_recipient_kpp": settings.teksher_transgran_recipient_kpp,
@@ -176,6 +180,9 @@ def settings_public_dict(settings: AppSettingsModel) -> dict:
         "has_wb_api_token": bool(settings.wb_api_token),
         "teksher_username": settings.teksher_username,
         "has_teksher_password": bool(settings.teksher_password),
+        "teksher_uot_name": settings.teksher_uot_name,
+        "teksher_gcp": settings.teksher_gcp,
+        "teksher_company_gcp_label": teksher_company_gcp_label(settings),
         "teksher_transgran_recipient_name": settings.teksher_transgran_recipient_name,
         "teksher_transgran_recipient_inn": settings.teksher_transgran_recipient_inn,
         "teksher_transgran_recipient_kpp": settings.teksher_transgran_recipient_kpp,
@@ -187,3 +194,11 @@ def settings_public_dict(settings: AppSettingsModel) -> dict:
         "transgran_document_number_prefix": settings.transgran_document_number_prefix,
         "step_timeout_seconds": settings.step_timeout_seconds,
     }
+
+
+def teksher_company_gcp_label(settings: AppSettingsModel) -> str:
+    name = str(getattr(settings, "teksher_uot_name", "") or "").strip()
+    gcp = str(getattr(settings, "teksher_gcp", "") or "").strip()
+    if name and gcp:
+        return f"{name} ({gcp})"
+    return ""
