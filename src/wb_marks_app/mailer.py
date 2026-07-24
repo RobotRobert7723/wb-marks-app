@@ -15,18 +15,18 @@ def send_password_reset_email(config: AppConfig, to_email: str, login: str, rese
         raise RuntimeError("SMTP is not configured.")
 
     message = EmailMessage()
-    message["Subject"] = "WB Marks App password reset"
+    message["Subject"] = "Восстановление пароля WB Marks App"
     message["From"] = config.smtp_from_email
     message["To"] = to_email
     message.set_content(
         "\n".join(
             [
-                f"Login: {login}",
+                f"Логин: {login}",
                 "",
-                "To reset your password, open the link:",
+                "Чтобы сбросить пароль, откройте ссылку:",
                 reset_link,
                 "",
-                f"The link is valid for {config.password_reset_ttl_minutes} minutes.",
+                f"Ссылка действует {config.password_reset_ttl_minutes} минут.",
             ]
         )
     )

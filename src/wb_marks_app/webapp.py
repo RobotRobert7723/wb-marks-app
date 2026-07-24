@@ -433,7 +433,7 @@ def create_app() -> FastAPI:
                 "forgot_password.html",
                 _base_context(
                     request,
-                    message="SMTP is not configured.",
+                    message="Отправка почты пока не настроена.",
                     form={"email": email.strip(), "login": login.strip()},
                 ),
                 status_code=400,
@@ -443,14 +443,26 @@ def create_app() -> FastAPI:
             user, raw_token = request_password_reset(session, config, email, login)
             if user is not None and raw_token is not None:
                 reset_link = f"{config.app_base_url.rstrip('/')}/reset-password/{raw_token}"
-                send_password_reset_email(config, user.email, user.login, reset_link)
+                try:
+                    send_password_reset_email(config, user.email, user.login, reset_link)
+                except Exception as exc:
+                    return templates.TemplateResponse(
+                        request,
+                        "forgot_password.html",
+                        _base_context(
+                            request,
+                            message=f"Не удалось отправить письмо: {exc}",
+                            form={"email": email.strip(), "login": login.strip()},
+                        ),
+                        status_code=500,
+                    )
 
         return templates.TemplateResponse(
             request,
             "forgot_password.html",
             _base_context(
                 request,
-                message="If the email and login exist, the reset link has been sent.",
+                message="Если email и логин найдены, ссылка для сброса пароля отправлена.",
                 form={"email": "", "login": ""},
             ),
         )

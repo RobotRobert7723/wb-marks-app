@@ -216,7 +216,7 @@ class AuthRouteTests(unittest.TestCase):
                     data={"email": "reset@example.com", "login": "reset_user"},
                 )
                 self.assertEqual(200, response.status_code)
-                self.assertIn("reset link has been sent", response.text)
+                self.assertIn("ссылка для сброса пароля отправлена", response.text)
                 self.assertEqual("reset@example.com", captured["to_email"])
                 self.assertEqual("reset_user", captured["login"])
                 token = captured["reset_link"].rsplit("/", 1)[-1]
@@ -242,6 +242,29 @@ class AuthRouteTests(unittest.TestCase):
                     os.environ.pop("APP_BASE_URL", None)
                 else:
                     os.environ["APP_BASE_URL"] = old_app_base_url
+                if old_smtp_host is None:
+                    os.environ.pop("SMTP_HOST", None)
+                else:
+                    os.environ["SMTP_HOST"] = old_smtp_host
+                if old_smtp_from is None:
+                    os.environ.pop("SMTP_FROM_EMAIL", None)
+                else:
+                    os.environ["SMTP_FROM_EMAIL"] = old_smtp_from
+
+    def test_password_reset_requires_configured_smtp(self) -> None:
+        with _isolated_app() as client:
+            old_smtp_host = os.environ.get("SMTP_HOST")
+            old_smtp_from = os.environ.get("SMTP_FROM_EMAIL")
+            os.environ.pop("SMTP_HOST", None)
+            os.environ.pop("SMTP_FROM_EMAIL", None)
+            try:
+                response = client.post(
+                    "/forgot-password",
+                    data={"email": "missing@example.com", "login": "missing_user"},
+                )
+                self.assertEqual(400, response.status_code)
+                self.assertIn("Отправка почты пока не настроена.", response.text)
+            finally:
                 if old_smtp_host is None:
                     os.environ.pop("SMTP_HOST", None)
                 else:
