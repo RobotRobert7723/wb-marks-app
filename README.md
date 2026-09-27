@@ -1,5 +1,9 @@
 # WB Marks App
 
+> Archived legacy repository. Active MarksApp development and production deployments now live in
+> [mmarketnbf-hash/marksapp-v3](https://github.com/mmarketnbf-hash/marksapp-v3).
+> This repository is kept only as a historical v1 source of verified logic and should not be used for new work.
+
 Server-side v1 for:
 
 - loading a WB draft supply by `preorderID`,
